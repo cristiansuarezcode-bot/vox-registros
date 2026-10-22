@@ -74,8 +74,12 @@ export function RegistrarPago() {
     return e?.plan ? (cat.planes || []).find(p => norm(p.nombre) === norm(e.plan)) || { nombre: e.plan, valor_mensual: 0 } : null;
   };
   const plan = planDe(quien);
+  const personal = quien?.estudiante_id ? cat.estudiantes.find(x => x.id === quien.estudiante_id)?.valor_mensual || 0 : 0;
   const valorSugerido = (c: string, q: Quien) => {
-    if (norm(c) === 'mensualidad') return planDe(q)?.valor_mensual || 0;
+    if (norm(c) === 'mensualidad') {
+      const e = q?.estudiante_id ? cat.estudiantes.find(x => x.id === q.estudiante_id) : undefined;
+      return e?.valor_mensual || planDe(q)?.valor_mensual || 0;
+    }
     return cat.conceptos.find(x => x.nombre === c)?.valor_base || 0;
   };
   const base = concepto ? valorSugerido(concepto, quien) : 0;
@@ -126,7 +130,7 @@ export function RegistrarPago() {
                 opciones={pedidosDeQuien.map(p => ({ v: p.pedido, t: `${p.pedido} · debe ${pesos(p.saldo)}` }))} />
             </Campo>
           )}
-          <Campo label="Valor" ayuda={norm(concepto) === 'mensualidad' ? (plan ? (plan.valor_mensual ? `${plan.nombre}: ${pesos(plan.valor_mensual)} al mes` : `${plan.nombre} no tiene valor mensual. Ponlo en Estudiantes → Planes.`) : quien?.estudiante_id ? 'Este estudiante no tiene plan asignado.' : undefined) : undefined}>
+          <Campo label="Valor" ayuda={norm(concepto) === 'mensualidad' ? (personal && plan && personal !== plan.valor_mensual ? `${plan.nombre} con valor acordado: ${pesos(personal)} al mes` : plan ? (plan.valor_mensual ? `${plan.nombre}: ${pesos(plan.valor_mensual)} al mes` : `${plan.nombre} no tiene valor mensual.${cat.admin_conectado ? ' Ponlo en el admin.' : ' Ponlo en Estudiantes → Planes.'}`) : quien?.estudiante_id ? 'Este estudiante no tiene plan asignado.' : undefined) : undefined}>
             <Monto valor={valor} onChange={v => { setValor(v); }} />
           </Campo>
           <Campo label="Fecha"><input type="date" value={fecha} max={hoy()} onChange={e => setFecha(e.target.value)} /></Campo>

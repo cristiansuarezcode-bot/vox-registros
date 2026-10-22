@@ -2,19 +2,25 @@
 import { useMemo, useState } from 'react';
 import { reemplazarSesion, leerSesion } from '@/lib/api';
 import { fechaCorta, hoy, norm, pesos, primeroDelMes } from '@/lib/util';
-import { BotonAnular, Campo, Cargando, ErrorCaja, Modal, Monto, Pantalla, Segmentado, Selector, useAccion, useApp, useDatos } from './ui';
+import { BotonAnular, Campo, Cargando, ErrorCaja, Modal, Monto, Pantalla, Segmentado, Selector, TraerDelAdmin, useAccion, useApp, useDatos } from './ui';
 
 // ================================================================== estudiantes y planes
-type EstFila = { id: string; nombre: string; plan: string; activo: boolean; nota: string };
+type EstFila = { id: string; nombre: string; plan: string; activo: boolean; nota: string; estado_admin?: string; del_admin?: boolean; valor_mensual?: number };
 type PlanFila = { id: string; nombre: string; valor_mensual: number; activo: boolean; nota: string; estudiantes: number };
-type ListaEst = { estudiantes: EstFila[]; planes: PlanFila[] };
+type ListaEst = { estudiantes: EstFila[]; planes: PlanFila[]; admin?: { conectado: boolean; ultima: string } };
+const ESTADOS_ADMIN: Record<string, string> = { ACTIVO: 'Activo', NUEVO: 'Nuevo', PAUSADO: 'Pausado', DE_VIAJE: 'De viaje', INCAPACITADO: 'Incapacitado', RETIRADO: 'Retirado' };
+const estadoAdmin = (e: string) => ESTADOS_ADMIN[e] || e;
+const haceCuanto = (iso: string) => {
+  const m = Math.round((Date.now() - Date.parse(iso)) / 60000);
+  return !iso || !isFinite(m) ? '' : m < 1 ? 'hace un momento' : m < 60 ? `hace ${m} min` : m < 1440 ? `hace ${Math.round(m / 60)} h` : fechaCorta(iso.slice(0, 10));
+};
 
 export function Estudiantes() {
   const { params, ir } = useApp();
   const pestana = params.pestana === 'planes' ? 'planes' : 'estudiantes';
   const datos = useDatos<ListaEst>('listarEstudiantes', {}, []);
   return (
-    <Pantalla titulo="Estudiantes y planes" sub="Agrega estudiantes, asígnales su plan y define cuánto vale cada plan al mes">
+    <Pantalla titulo="Estudiantes y planes" sub={datos.d?.admin?.conectado ? 'Llegan solos desde el admin cada 15 minutos. Se matriculan y se editan allá' : 'Agrega estudiantes, asígnales su plan y define cuánto vale cada plan al mes'}>
       <div className="pestanas">
         <button className={pestana === 'estudiantes' ? 'activo' : ''} onClick={() => ir('estudiantes')}>Estudiantes</button>
         <button className={pestana === 'planes' ? 'activo' : ''} onClick={() => ir('estudiantes', { pestana: 'planes' })}>Planes</button>
@@ -54,7 +60,11 @@ function ListaEstudiantes({ d, recargar }: { d: ListaEst; recargar: () => void }
           <Campo label="Plan"><Selector valor={plan} onChange={setPlan} vacio="Todos los planes" opciones={[...d.planes.map(p => p.nombre), { v: '—', t: 'Sin plan' }]} /></Campo>
           <Campo label="Mostrar"><Segmentado opciones={['Activos', 'Inactivos', 'Todos'] as const} valor={estado} onChange={setEstado} /></Campo>
         </div>
-        <div className="acciones"><button className="btn" onClick={() => setNuevo(true)}>+ Agregar estudiante</button></div>
+        <div className="acciones">
+          {d.admin?.conectado
+            ? <><TraerDelAdmin onListo={recargar} />{d.admin.ultima && <span className="suave" style={{ fontSize: 13 }}>Última vez: {haceCuanto(d.admin.ultima)}</span>}</>
+            : <button className="btn" onClick={() => setNuevo(true)}>+ Agregar estudiante</button>}
+        </div>
       </div>
       <div className="tarjeta">
         <p className="suave mt0" style={{ fontSize: 13 }}>{filas.length} estudiante(s)</p>
@@ -63,16 +73,19 @@ function ListaEstudiantes({ d, recargar }: { d: ListaEst; recargar: () => void }
             <thead><tr><th>Nombre</th><th>Plan</th><th>Estado</th><th></th></tr></thead>
             <tbody>{filas.map(e => (
               <tr key={e.id} className={e.activo ? '' : 'inactivo'}>
-                <td><button className="enlace" onClick={() => ir('ficha', { estudiante_id: e.id })}>{e.nombre}</button> {!e.activo && <span className="chip inactivo">Inactivo</span>}</td>
-                <td data-label="Plan">{e.plan || <span className="suave">Sin plan</span>}</td>
-                <td className="solo-escritorio">{e.activo ? <span className="chip ok">Activo</span> : <span className="chip inactivo">Inactivo</span>}</td>
+                <td><button className="enlace" onClick={() => ir('ficha', { estudiante_id: e.id })}>{e.nombre}</button> {!e.activo && <span className="chip inactivo">Inactivo</span>}
+                  {e.estado_admin && e.activo && e.estado_admin !== 'ACTIVO' && <> <span className="chip">{estadoAdmin(e.estado_admin)}</span></>}
+                  {d.admin?.conectado && !e.del_admin && <><br /><small className="suave">No está en el admin</small></>}
+                  {e.nota && <><br /><small className="suave">{e.nota}</small></>}</td>
+                <td data-label="Plan">{e.plan || <span className="suave">Sin plan</span>}{e.valor_mensual && e.valor_mensual !== d.planes.find(x => norm(x.nombre) === norm(e.plan))?.valor_mensual ? <><br /><small className="suave">Valor acordado: {pesos(e.valor_mensual)}</small></> : null}</td>
+                <td className="solo-escritorio">{e.estado_admin ? <span className={'chip ' + (e.activo ? 'ok' : 'inactivo')}>{estadoAdmin(e.estado_admin)}</span> : e.activo ? <span className="chip ok">Activo</span> : <span className="chip inactivo">Inactivo</span>}</td>
                 <td className="acciones-fila"><button className="btn secundario chico" onClick={() => setEditar(e)}>Editar</button></td>
               </tr>))}
             </tbody>
           </table></div>
         )}
       </div>
-      {editar && <EditarEstudiante e={editar} planes={d.planes} onCerrar={() => setEditar(null)} onListo={() => { setEditar(null); recargar(); }} />}
+      {editar && <EditarEstudiante e={editar} planes={d.planes} soloNota={!!(d.admin?.conectado && editar.del_admin)} onCerrar={() => setEditar(null)} onListo={() => { setEditar(null); recargar(); }} />}
       {nuevo && <NuevoEstudiante planes={d.planes} onCerrar={() => setNuevo(false)} onListo={() => { setNuevo(false); recargar(); }} />}
     </>
   );
@@ -83,26 +96,42 @@ const opcionesPlan = (planes: PlanFila[], actual = '') => {
   return ops;
 };
 
-function EditarEstudiante({ e, planes, onCerrar, onListo }: { e: EstFila; planes: PlanFila[]; onCerrar: () => void; onListo: () => void }) {
+function EditarEstudiante({ e, planes, soloNota, onCerrar, onListo }: { e: EstFila; planes: PlanFila[]; soloNota: boolean; onCerrar: () => void; onListo: () => void }) {
   const { recargarCat } = useApp();
   const [nombre, setNombre] = useState(e.nombre);
   const [plan, setPlan] = useState(e.plan);
   const [activo, setActivo] = useState(e.activo);
+  const [nota, setNota] = useState(e.nota || '');
   const { ocupado, correr } = useAccion();
   const guardar = async () => {
     const datos: Record<string, unknown> = { id: e.id };
-    if (nombre.trim() !== e.nombre) datos.nombre = nombre;
-    if (plan !== e.plan) datos.plan = plan;
-    if (activo !== e.activo) datos.activo = activo;
+    if (!soloNota && nombre.trim() !== e.nombre) datos.nombre = nombre;
+    if (!soloNota && plan !== e.plan) datos.plan = plan;
+    if (!soloNota && activo !== e.activo) datos.activo = activo;
+    if (nota.trim() !== (e.nota || '')) datos.nota = nota;
     const r = await correr<{ renombrados: number }>('editarEstudiante', datos, 'Estudiante actualizado');
     if (r) { await recargarCat(); onListo(); }
   };
   return (
     <Modal titulo="Editar estudiante" onCerrar={onCerrar}>
-      <div className="rejilla">
-        <Campo label="Nombre completo" ancho ayuda="Si lo corriges, también se corrige en sus pagos y pedidos."><input value={nombre} onChange={x => setNombre(x.target.value)} /></Campo>
-        <Campo label="Plan" ancho><Selector valor={plan} onChange={setPlan} vacio="Sin plan" opciones={opcionesPlan(planes, e.plan)} /></Campo>
-        <Campo label="Estado" ancho><Segmentado opciones={['Activo', 'Inactivo'] as const} valor={activo ? 'Activo' : 'Inactivo'} onChange={v => setActivo(v === 'Activo')} /></Campo>
+      {soloNota ? (
+        <>
+          <p className="aviso info mt0">El nombre, el plan y el estado vienen del admin: si hay que corregirlos, se hace allá y aquí se actualizan solos.</p>
+          <div className="rejilla">
+            <div className="campo" style={{ gridColumn: "1 / -1" }}><label>Nombre</label><div className="elegido"><b>{e.nombre}</b></div></div>
+            <div className="campo"><label>Plan</label><div className="elegido">{e.plan || 'Sin plan'}{e.valor_mensual ? ` · ${pesos(e.valor_mensual)}` : ''}</div></div>
+            <div className="campo"><label>Estado en el admin</label><div className="elegido">{estadoAdmin(e.estado_admin || '') || '—'}</div></div>
+          </div>
+        </>
+      ) : (
+        <div className="rejilla">
+          <Campo label="Nombre completo" ancho ayuda="Si lo corriges, también se corrige en sus pagos y pedidos."><input value={nombre} onChange={x => setNombre(x.target.value)} /></Campo>
+          <Campo label="Plan" ancho><Selector valor={plan} onChange={setPlan} vacio="Sin plan" opciones={opcionesPlan(planes, e.plan)} /></Campo>
+          <Campo label="Estado" ancho><Segmentado opciones={['Activo', 'Inactivo'] as const} valor={activo ? 'Activo' : 'Inactivo'} onChange={v => setActivo(v === 'Activo')} /></Campo>
+        </div>
+      )}
+      <div className="rejilla" style={{ marginTop: 10 }}>
+        <Campo label="Nota (opcional)" ancho><input value={nota} onChange={x => setNota(x.target.value)} placeholder="Ej: la recoge la abuela" /></Campo>
       </div>
       {!activo && e.activo && <p className="aviso info">Si queda inactivo, deja de salir en las listas para registrar. Sus pagos y saldos se conservan.</p>}
       <div className="acciones"><button className="btn" disabled={ocupado || !nombre.trim()} onClick={guardar}>{ocupado ? 'Guardando…' : 'Guardar'}</button><button className="btn secundario" onClick={onCerrar}>Cancelar</button></div>
@@ -132,12 +161,14 @@ function NuevoEstudiante({ planes, onCerrar, onListo }: { planes: PlanFila[]; on
 
 function Planes({ d, recargar }: { d: ListaEst; recargar: () => void }) {
   const [editar, setEditar] = useState<PlanFila | 'nuevo' | null>(null);
+  const delAdmin = !!d.admin?.conectado;
   const sinValor = d.planes.filter(p => p.activo && !p.valor_mensual).length;
   return (
     <>
-      {sinValor > 0 && <p className="aviso info">{sinValor} plan(es) no tienen valor mensual. Con el valor, al registrar una mensualidad el monto sale solo.</p>}
+      {delAdmin && <p className="aviso info">Los planes y sus precios vienen del admin. Si cambia un precio, cámbialo allá.</p>}
+      {!delAdmin && sinValor > 0 && <p className="aviso info">{sinValor} plan(es) no tienen valor mensual. Con el valor, al registrar una mensualidad el monto sale solo.</p>}
       <div className="tarjeta">
-        <div className="acciones mt0" style={{ marginTop: 0, marginBottom: 10 }}><button className="btn" onClick={() => setEditar('nuevo')}>+ Nuevo plan</button></div>
+        {!delAdmin && <div className="acciones mt0" style={{ marginTop: 0, marginBottom: 10 }}><button className="btn" onClick={() => setEditar('nuevo')}>+ Nuevo plan</button></div>}
         <div className="tabla-envoltura"><table className="tabla tarjetas">
           <thead><tr><th>Plan</th><th className="num">Valor mensual</th><th className="num">Estudiantes</th><th>Estado</th><th></th></tr></thead>
           <tbody>{d.planes.map(p => (
@@ -146,7 +177,7 @@ function Planes({ d, recargar }: { d: ListaEst; recargar: () => void }) {
               <td className="num" data-label="Valor mensual">{p.valor_mensual ? pesos(p.valor_mensual) : <span className="chip debe">Sin valor</span>}</td>
               <td className="num" data-label="Estudiantes">{p.estudiantes}</td>
               <td className="solo-escritorio">{p.activo ? <span className="chip ok">Activo</span> : <span className="chip inactivo">Inactivo</span>}</td>
-              <td className="acciones-fila"><button className="btn secundario chico" onClick={() => setEditar(p)}>Editar</button></td>
+              <td className="acciones-fila">{!delAdmin && <button className="btn secundario chico" onClick={() => setEditar(p)}>Editar</button>}</td>
             </tr>))}
           </tbody>
         </table></div>

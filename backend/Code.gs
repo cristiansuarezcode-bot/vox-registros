@@ -16,7 +16,7 @@
 // Hoja de cálculo que sirve de base de datos (Registros Vox Corpus Danza, cuenta voxcorpusdanza@gmail.com).
 const HOJA_ID = '1XWxLoazHg4dCTqvaM0E2ZQYFzcL0XjNFcp_xQ4B51p0';
 const TZ = 'America/Bogota';
-const VERSION = '1.3.0';
+const VERSION = '1.4.0';
 const SESION_SEG = 6 * 60 * 60;          // máximo que permite CacheService
 const INTENTOS_MAX = 5;                  // claves erradas antes de bloquear
 const BLOQUEO_SEG = 15 * 60;
@@ -59,7 +59,7 @@ const COLUMNAS_EXTRA = {
   'Gastos': ['anulado_por', 'anulado_en'],
   'Traslados': ['anulado_por', 'anulado_en'],
   'Usuarios': ['clave_nueva', 'sesion_v'],
-  'Estudiantes': ['actualizado_por', 'actualizado_en'],
+  'Estudiantes': ['actualizado_por', 'actualizado_en', 'supabase_id', 'estado_admin', 'valor_mensual', 'sincronizado_en'],
   'Profes': ['nota', 'actualizado_por', 'actualizado_en'],
 };
 const BITACORA_COLS = ['fecha_hora', 'usuario', 'accion', 'hoja', 'id', 'detalle'];
@@ -127,6 +127,8 @@ const ACCIONES = {
   listarDescuentos:    [listarDescuentos_, false],
   guardarDescuento:    [guardarDescuento_, true],
   guardarProfe:        [guardarProfe_, true],
+  traerDelAdmin:       [traerDelAdmin_, true],
+  estadoAdmin:         [estadoAdmin_, false],
 };
 
 function enrutar_(body) {
@@ -210,7 +212,8 @@ function catalogos_(d, ses) {
   return {
     usuario: { nombre: ses.nombre, rol: ses.rol },
     hoy: ymd_(new Date()),
-    estudiantes: activos_(H.ESTUDIANTES).map(f => ({ id: f.id, nombre: f.nombre, plan: f.plan || '' }))
+    estudiantes: activos_(H.ESTUDIANTES).map(f => Object.assign({ id: f.id, nombre: f.nombre, plan: f.plan || '' },
+      num_(f.valor_mensual) ? { valor_mensual: num_(f.valor_mensual) } : {}, f.estado_admin ? { estado_admin: String(f.estado_admin) } : {}))
       .sort((a, b) => a.nombre.localeCompare(b.nombre, 'es')),
     productos: (() => { const st = stocks_(); return activos_(H.PRODUCTOS).map(f => ({ id: f.id, nombre: f.nombre, precio: num_(f.precio),
       stock: st[f.id] ? st[f.id].stock : null })); })(),
@@ -223,6 +226,7 @@ function catalogos_(d, ses) {
     cuentas: activos_(H.CUENTAS).map(f => ({ id: f.id, nombre: f.nombre, tipo: f.tipo, sugerida_dias: String(f.sugerida_dias || '') })),
     cuentas_todas: tabla_(H.CUENTAS).filas.filter(f => f.id).map(f => String(f.nombre)),
     cuenta_sugerida: cuentaSugerida_(new Date()),
+    admin_conectado: adminConectado_(),
     listas: l,
   };
 }
@@ -471,6 +475,7 @@ function registrarTraslado_(d, ses) {
 }
 
 function agregarEstudiante_(d, ses) {
+  if (adminConectado_()) throw err_('Los estudiantes se crean en el admin. Después toca "Traer estudiantes del admin" y aparece aquí.');
   const nombre = requerido_(d.nombre, 'nombre').replace(/\s+/g, ' ');
   const ya = tabla_(H.ESTUDIANTES).filas.find(f => norm_(f.nombre) === norm_(nombre));
   if (ya) throw err_('Ya existe: ' + ya.nombre + ' (' + ya.id + ')' + (esSi_(ya.activo) ? '' : ', marcado como inactivo'), 'duplicado');
@@ -536,9 +541,11 @@ function listarEstudiantes_() {
   const est = tabla_(H.ESTUDIANTES).filas.filter(f => f.id).map(f => {
     const activo = norm_(f.activo) !== 'no';
     if (activo && f.plan) usos[norm_(f.plan)] = (usos[norm_(f.plan)] || 0) + 1;
-    return { id: f.id, nombre: f.nombre, plan: f.plan || '', activo: activo, nota: f.nota || '' };
+    return { id: f.id, nombre: f.nombre, plan: f.plan || '', activo: activo, nota: f.nota || '', estado_admin: String(f.estado_admin || ''),
+      del_admin: !!f.supabase_id, valor_mensual: num_(f.valor_mensual) };
   }).sort((a, b) => String(a.nombre).localeCompare(String(b.nombre), 'es'));
   return {
+    admin: estadoAdmin_(),
     estudiantes: est,
     planes: planes.map(p => ({ id: p.id, nombre: p.nombre, valor_mensual: num_(p.valor_mensual), activo: norm_(p.activo) !== 'no',
       nota: p.nota || '', estudiantes: usos[norm_(p.nombre)] || 0 })),
@@ -550,6 +557,9 @@ function editarEstudiante_(d, ses) {
   const e = t.filas.find(f => f.id === d.id);
   if (!e) throw err_('No encontré el estudiante ' + d.id);
   const cambios = {};
+  if (adminConectado_() && e.supabase_id && (d.nombre !== undefined || d.plan !== undefined || d.activo !== undefined))
+    throw err_('El nombre, el plan y el estado de este estudiante se cambian en el admin. Aquí solo se puede editar la nota.');
+  if (d.nota !== undefined && texto_(d.nota) !== String(e.nota || '')) cambios.nota = texto_(d.nota);
   if (d.nombre !== undefined) {
     const nombre = requerido_(d.nombre, 'nombre').replace(/\s+/g, ' ');
     const ya = t.filas.find(f => f.id !== e.id && norm_(f.nombre) === norm_(nombre));
@@ -588,6 +598,7 @@ function renombrar_(hoja, estudianteId, nombre, colId, colNombre) {
 }
 
 function guardarPlan_(d, ses) {
+  if (adminConectado_()) throw err_('Los planes y sus precios se manejan en el admin y llegan solos a esta planilla.');
   if (!hojaExiste_(H.PLANES)) throw err_('Falta la pestaña Planes: ejecuta "configurar" en Apps Script.');
   const t = tabla_(H.PLANES);
   const nombre = requerido_(d.nombre, 'nombre del plan').replace(/\s+/g, ' ');
@@ -1479,4 +1490,269 @@ function correccionesRevision22oct() {
   SpreadsheetApp.flush();
   console.log(res.join('\n'));
   return res.join('\n');
+}
+
+
+// ===================================================================== estudiantes desde el admin (Supabase)
+/*
+ * El admin (Supabase) es la fuente de los estudiantes y los planes. Esta planilla solo los lee.
+ * Supabase tiene dos funciones de solo lectura protegidas con una clave: registros_estudiantes y registros_planes.
+ *
+ * Propiedades del script (Configuración del proyecto → Propiedades del script):
+ *   ADMIN_URL    → https://<proyecto>.supabase.co
+ *   ADMIN_LLAVE  → la llave pública (anon / publishable) del proyecto
+ *   ADMIN_CLAVE  → la clave guardada en Supabase (vault: registros_sheet_clave)
+ *
+ * Pasos, desde el editor:
+ *   1. revisarEmparejamiento  → arma la pestaña "Emparejar admin" sin cambiar nada más.
+ *   2. Revisar esa pestaña y escribir en "confirmar": Sí / el código E### correcto / Nuevo / (vacío = después).
+ *   3. aplicarEmparejamiento  → une los confirmados y deja la planilla conectada al admin.
+ *   4. activarSincronizacionAuto → trae los cambios cada 15 minutos.
+ */
+const HOJA_EMPAREJAR = 'Emparejar admin';
+const EMPAREJAR_COLS = ['supabase_id', 'nombre_admin', 'estado_admin', 'plan_admin', 'tipo', 'id_planilla', 'nombre_planilla', 'confirmar', 'nota'];
+const SES_ADMIN = { nombre: 'Sincronización admin', rol: 'sistema' };
+
+function adminConectado_() { return PropertiesService.getScriptProperties().getProperty('ADMIN_EMPAREJADO') === 'si'; }
+function esActivoAdmin_(estado) { return norm_(estado) !== 'retirado'; }
+
+function configAdmin_() {
+  const p = PropertiesService.getScriptProperties();
+  const c = { url: String(p.getProperty('ADMIN_URL') || '').trim().replace(/\/+$/, ''), llave: String(p.getProperty('ADMIN_LLAVE') || '').trim(), clave: String(p.getProperty('ADMIN_CLAVE') || '').trim() };
+  const faltan = ['url', 'llave', 'clave'].filter(k => !c[k]).map(k => 'ADMIN_' + k.toUpperCase());
+  if (faltan.length) throw err_('Falta conectar el admin: en Apps Script → Configuración del proyecto → Propiedades del script, agrega ' + faltan.join(', ') + '.');
+  if (!/^https:\/\/[a-z0-9-]+\.supabase\.co$/.test(c.url)) throw err_('ADMIN_URL debe ser como https://xxxx.supabase.co');
+  return c;
+}
+
+// Lee estudiantes y planes del admin. No escribe nada.
+function leerAdmin_() {
+  const c = configAdmin_();
+  const pedir = fn => ({ url: c.url + '/rest/v1/rpc/' + fn, method: 'post', contentType: 'application/json', muteHttpExceptions: true,
+    headers: { apikey: c.llave, Authorization: 'Bearer ' + c.llave }, payload: JSON.stringify({ p_clave: c.clave }) });
+  const rs = UrlFetchApp.fetchAll([pedir('registros_estudiantes'), pedir('registros_planes')]);
+  const datos = rs.map((r, i) => {
+    const code = r.getResponseCode(), txt = r.getContentText();
+    if (code === 200) return JSON.parse(txt);
+    if (/Clave inv/i.test(txt)) throw err_('El admin rechazó la clave (ADMIN_CLAVE no coincide con la de Supabase).');
+    if (code === 401 || code === 403) throw err_('El admin rechazó la llave pública (revisa ADMIN_LLAVE).');
+    if (code === 404) throw err_('No encontré la función ' + (i ? 'registros_planes' : 'registros_estudiantes') + ' en el admin.');
+    throw err_('El admin respondió con error ' + code + '. Intenta de nuevo en un momento.');
+  });
+  const estudiantes = datos[0].filter(e => e.supabase_id && texto_(e.nombre)).map(e => ({
+    supabase_id: String(e.supabase_id), nombre: texto_(e.nombre).replace(/\s+/g, ' '), plan: texto_(e.plan),
+    valor_mensual: num_(e.valor_mensual), estado: texto_(e.estado) || 'ACTIVO' }));
+  const planes = datos[1].filter(p => texto_(p.nombre)).map(p => ({ nombre: texto_(p.nombre).replace(/\s+/g, ' '), valor_mensual: num_(p.valor_mensual), activo: p.activo !== false }));
+  return { estudiantes: estudiantes, planes: planes };
+}
+
+const PALABRAS_VACIAS_ = { de: 1, del: 1, la: 1, las: 1, los: 1, y: 1 };
+function tokens_(n) { return norm_(n).replace(/[^a-z0-9ñ ]/g, ' ').split(' ').filter(t => t && !PALABRAS_VACIAS_[t]); }
+// Qué tan parecidos son dos nombres: palabras en común sobre las del nombre más corto (1 = uno contiene al otro).
+// El primer nombre de uno tiene que aparecer en el otro.
+function parecido_(a, b) {
+  const ta = tokens_(a), tb = tokens_(b);
+  if (!ta.length || !tb.length) return 0;
+  if (tb.indexOf(ta[0]) < 0 && ta.indexOf(tb[0]) < 0) return 0;
+  const comunes = ta.filter(t => tb.indexOf(t) >= 0).length;
+  return comunes / Math.min(ta.length, tb.length);
+}
+
+function fila_(a, tipo, f, confirmar, nota) { return [a.supabase_id, a.nombre, a.estado, a.plan, tipo, f ? f.id : '', f ? f.nombre : '', confirmar, nota || '']; }
+
+// Propuesta de emparejamiento entre el admin y la planilla (no escribe nada).
+function proponerEmparejamiento_(admin) {
+  const est = tabla_(H.ESTUDIANTES).filas.filter(f => f.id);
+  const porSupa = {}; est.forEach(f => { if (f.supabase_id) porSupa[String(f.supabase_id)] = f; });
+  const usados = {};
+  Object.keys(porSupa).forEach(k => usados[porSupa[k].id] = true);
+  const libres = () => est.filter(f => !f.supabase_id && !usados[f.id]);
+  const filas = [], pendientes = [];
+  admin.estudiantes.forEach(a => {
+    const ya = porSupa[a.supabase_id];
+    if (ya) { filas.push(fila_(a, 'Ya vinculado', ya, 'Sí')); return; }
+    const iguales = libres().filter(f => norm_(f.nombre) === norm_(a.nombre));
+    const otrosIgual = admin.estudiantes.some(b => b !== a && norm_(b.nombre) === norm_(a.nombre));
+    if (iguales.length === 1 && !otrosIgual) { usados[iguales[0].id] = true; filas.push(fila_(a, 'Igual', iguales[0], 'Sí')); return; }
+    pendientes.push(a);
+  });
+  pendientes.forEach(a => {
+    const cand = libres().map(f => ({ f: f, p: parecido_(a.nombre, f.nombre) })).filter(x => x.p >= 0.6).sort((x, y) => y.p - x.p);
+    if (!cand.length) { filas.push(fila_(a, 'Nuevo', null, 'Nuevo')); return; }
+    const otros = cand.slice(1, 4).map(x => x.f.id + ' ' + x.f.nombre).join(' · ');
+    filas.push(fila_(a, 'Parecido', cand[0].f, '', otros ? 'También podría ser: ' + otros : ''));
+  });
+  const propuestos = {}; filas.forEach(r => { if (r[5]) propuestos[r[5]] = true; });
+  est.filter(f => !f.supabase_id && !propuestos[f.id]).forEach(f =>
+    filas.push(['', '', '', '', 'Solo en planilla', f.id, f.nombre, '', norm_(f.activo) === 'no' ? 'Inactivo en la planilla' : 'No aparece en el admin']));
+  return filas;
+}
+
+/** Paso 1 (editor): arma la pestaña "Emparejar admin" para revisarla. No cambia estudiantes. */
+function revisarEmparejamiento() {
+  const admin = leerAdmin_();
+  const filas = proponerEmparejamiento_(admin);
+  const orden = { 'Parecido': 0, 'Nuevo': 1, 'Solo en planilla': 2, 'Igual': 3, 'Ya vinculado': 4 };
+  filas.sort((x, y) => orden[x[4]] - orden[y[4]] || String(x[1] || x[6]).localeCompare(String(y[1] || y[6]), 'es'));
+  const ss = libro_();
+  const sh = ss.getSheetByName(HOJA_EMPAREJAR) || ss.insertSheet(HOJA_EMPAREJAR);
+  sh.clearContents();
+  sh.getRange(1, 1, 1, EMPAREJAR_COLS.length).setValues([EMPAREJAR_COLS]).setFontWeight('bold').setFontColor('#FFFFFF').setBackground('#1F1229');
+  sh.setFrozenRows(1);
+  if (filas.length) sh.getRange(2, 1, filas.length, EMPAREJAR_COLS.length).setValues(filas);
+  const cuenta = {}; filas.forEach(r => cuenta[r[4]] = (cuenta[r[4]] || 0) + 1);
+  const msg = 'Admin: ' + admin.estudiantes.length + ' estudiantes, ' + admin.planes.length + ' planes.\n' +
+    Object.keys(orden).filter(k => cuenta[k]).map(k => k + ': ' + cuenta[k]).join('\n') +
+    '\nRevisa la pestaña "' + HOJA_EMPAREJAR + '": en "confirmar" escribe Sí, el código E### correcto, Nuevo, o déjalo vacío para decidir después.';
+  console.log(msg);
+  return msg;
+}
+
+/** Paso 3 (editor): une lo confirmado en "Emparejar admin" y deja la planilla conectada al admin. */
+function aplicarEmparejamiento() {
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(30000)) throw err_('Hay alguien guardando. Intenta en un momento.');
+  try {
+    const t = tabla_(HOJA_EMPAREJAR);
+    const est = tabla_(H.ESTUDIANTES);
+    const porId = indice_(est.filas);
+    const res = { unidos: 0, nuevos: 0, despues: 0, errores: [] };
+    const asignados = {}, planes = [];
+    t.filas.forEach(r => {
+      if (!r.supabase_id) return;
+      const c = texto_(r.confirmar);
+      if (norm_(c) === 'nuevo') { res.nuevos++; return; }
+      const destino = esSi_(c) ? texto_(r.id_planilla) : /^E\d+$/i.test(c) ? c.toUpperCase() : '';
+      if (!destino) { res.despues++; return; }
+      const e = porId[destino];
+      if (!e) { res.errores.push(r.nombre_admin + ': no existe ' + destino); return; }
+      if (asignados[destino] || (e.supabase_id && String(e.supabase_id) !== String(r.supabase_id))) { res.errores.push(r.nombre_admin + ': ' + destino + ' ya está unido a otro estudiante del admin'); return; }
+      asignados[destino] = true;
+      if (String(e.supabase_id || '') !== String(r.supabase_id)) planes.push([e, String(r.supabase_id)]);
+    });
+    if (res.errores.length) { const m = 'No se aplicó nada porque hay errores:\n' + res.errores.join('\n'); console.log(m); return m; }
+    planes.forEach(x => { actualizar_(est, x[0], { supabase_id: x[1] }); res.unidos++; });
+    PropertiesService.getScriptProperties().setProperty('ADMIN_EMPAREJADO', 'si');
+    bitacora_(SES_ADMIN, 'emparejarAdmin', H.ESTUDIANTES, '', res);
+    const s = sincronizar_(SES_ADMIN);
+    SpreadsheetApp.flush();
+    const msg = 'Unidos: ' + res.unidos + ' · Nuevos: ' + res.nuevos + ' · Quedan para después: ' + res.despues + '\n' + resumenSinc_(s);
+    console.log(msg);
+    return msg;
+  } finally { lock.releaseLock(); }
+}
+
+// Los que quedaron con "confirmar" vacío en la revisión no se crean solos (para no duplicar a nadie).
+function pendientesEmparejar_() {
+  const o = {};
+  if (!hojaExiste_(HOJA_EMPAREJAR)) return o;
+  tabla_(HOJA_EMPAREJAR).filas.forEach(r => { if (r.supabase_id && !texto_(r.confirmar)) o[String(r.supabase_id)] = true; });
+  return o;
+}
+
+// Trae planes y estudiantes del admin y actualiza la planilla. Debe correr con el lock tomado.
+function sincronizar_(ses) {
+  if (!adminConectado_()) throw err_('Falta el emparejamiento inicial con el admin.');
+  const admin = leerAdmin_();
+  const r = { planes_nuevos: 0, planes_actualizados: 0, nuevos: [], actualizados: [], inactivados: [], pendientes: 0 };
+  const ahora = new Date();
+  // Planes
+  const tp = tabla_(H.PLANES);
+  const planPorNombre = indicePorNombre_(tp.filas.filter(f => f.id));
+  const nuevosPlanes = [];
+  admin.planes.forEach(p => {
+    const f = planPorNombre[norm_(p.nombre)];
+    const activo = p.activo ? 'Sí' : 'No';
+    if (!f) { nuevosPlanes.push({ id: '', nombre: p.nombre, valor_mensual: p.valor_mensual || '', activo: activo, nota: 'Del admin' }); return; }
+    const c = {};
+    if (f.nombre !== p.nombre) c.nombre = p.nombre;
+    if (num_(f.valor_mensual) !== p.valor_mensual) c.valor_mensual = p.valor_mensual || '';
+    if (String(f.activo) !== activo) c.activo = activo;
+    if (Object.keys(c).length) { actualizar_(tp, f, c); r.planes_actualizados++; }
+  });
+  if (nuevosPlanes.length) {
+    let n = numeroId_(siguienteId_(H.PLANES, 'id', 'PL', 2));
+    nuevosPlanes.forEach(p => p.id = 'PL' + pad_(n++, 2));
+    insertar_(H.PLANES, nuevosPlanes);
+    r.planes_nuevos = nuevosPlanes.length;
+  }
+  // Estudiantes
+  const te = tabla_(H.ESTUDIANTES);
+  const porSupa = {}; te.filas.forEach(f => { if (f.supabase_id) porSupa[String(f.supabase_id)] = f; });
+  const pendientes = pendientesEmparejar_();
+  const vistos = {}, nuevos = [];
+  let siguiente = numeroId_(siguienteId_(H.ESTUDIANTES, 'id', 'E', 3));
+  admin.estudiantes.forEach(a => {
+    vistos[a.supabase_id] = true;
+    const activo = esActivoAdmin_(a.estado) ? 'Sí' : 'No';
+    const f = porSupa[a.supabase_id];
+    if (!f) {
+      if (pendientes[a.supabase_id]) { r.pendientes++; return; }
+      const e = { id: 'E' + pad_(siguiente++, 3), nombre: a.nombre, plan: a.plan, activo: activo, nota: 'Del admin desde ' + ymd_(ahora),
+        supabase_id: a.supabase_id, estado_admin: a.estado, valor_mensual: a.valor_mensual || '', sincronizado_en: ahora };
+      nuevos.push(e); r.nuevos.push(e.id + ' ' + e.nombre);
+      return;
+    }
+    const c = {};
+    if (f.nombre !== a.nombre) c.nombre = a.nombre;
+    if (String(f.plan || '') !== a.plan) c.plan = a.plan;
+    if (String(f.activo) !== activo) c.activo = activo;
+    if (String(f.estado_admin || '') !== a.estado) c.estado_admin = a.estado;
+    if (num_(f.valor_mensual) !== a.valor_mensual) c.valor_mensual = a.valor_mensual || '';
+    if (!Object.keys(c).length) return;
+    const antes = {}; Object.keys(c).forEach(k => antes[k] = f[k]);
+    c.sincronizado_en = ahora;
+    actualizar_(te, f, c);
+    let renombrados = 0;
+    if (c.nombre) [H.PAGOS, H.CARGOS, H.PEDIDOS, H.VENTAS].forEach(h => renombrados += renombrar_(h, f.id, c.nombre));
+    r.actualizados.push(f.id + ' ' + a.nombre);
+    bitacora_(ses, 'sincronizarEstudiante', H.ESTUDIANTES, f.id, { antes: antes, despues: c, registros_renombrados: renombrados });
+  });
+  if (nuevos.length) { insertar_(H.ESTUDIANTES, nuevos); bitacora_(ses, 'estudiantesDelAdmin', H.ESTUDIANTES, '', { nuevos: r.nuevos }); }
+  // Los que ya no están en el admin (cuenta eliminada) quedan inactivos; su historial se conserva.
+  te.filas.filter(f => f.supabase_id && !vistos[String(f.supabase_id)] && norm_(f.activo) !== 'no').forEach(f => {
+    actualizar_(te, f, { activo: 'No', estado_admin: 'No está en el admin', sincronizado_en: ahora });
+    r.inactivados.push(f.id + ' ' + f.nombre);
+    bitacora_(ses, 'sincronizarEstudiante', H.ESTUDIANTES, f.id, { inactivado: 'ya no aparece en el admin' });
+  });
+  PropertiesService.getScriptProperties().setProperty('ADMIN_ULTIMA', ahora.toISOString());
+  return r;
+}
+
+function resumenSinc_(r) {
+  const partes = [];
+  if (r.nuevos.length) partes.push(r.nuevos.length + ' estudiante(s) nuevo(s)');
+  if (r.actualizados.length) partes.push(r.actualizados.length + ' actualizado(s)');
+  if (r.inactivados.length) partes.push(r.inactivados.length + ' inactivado(s)');
+  if (r.planes_nuevos || r.planes_actualizados) partes.push((r.planes_nuevos + r.planes_actualizados) + ' plan(es) actualizado(s)');
+  if (r.pendientes) partes.push(r.pendientes + ' pendiente(s) por emparejar');
+  return partes.length ? partes.join(' · ') : 'Todo estaba al día';
+}
+
+// Botón "Traer estudiantes del admin" de la página.
+function traerDelAdmin_(d, ses) {
+  const r = sincronizar_(ses);
+  return { resumen: resumenSinc_(r), nuevos: r.nuevos, actualizados: r.actualizados, inactivados: r.inactivados, pendientes: r.pendientes };
+}
+
+function estadoAdmin_() {
+  const p = PropertiesService.getScriptProperties();
+  return { conectado: adminConectado_(), ultima: p.getProperty('ADMIN_ULTIMA') || '' };
+}
+
+/** Lo ejecuta el activador cada 15 minutos. Si alguien está guardando, espera a la próxima vuelta. */
+function sincronizarAdminAuto() {
+  if (!adminConectado_()) return;
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(5000)) return;
+  try { const r = sincronizar_(SES_ADMIN); SpreadsheetApp.flush(); console.log(resumenSinc_(r)); }
+  catch (e) { console.log('No se pudo sincronizar: ' + e.message); }
+  finally { lock.releaseLock(); }
+}
+
+/** Paso 4 (editor): crea el activador de cada 15 minutos (una sola vez). */
+function activarSincronizacionAuto() {
+  ScriptApp.getProjectTriggers().filter(t => t.getHandlerFunction() === 'sincronizarAdminAuto').forEach(t => ScriptApp.deleteTrigger(t));
+  ScriptApp.newTrigger('sincronizarAdminAuto').timeBased().everyMinutes(15).create();
+  console.log('Listo: los estudiantes del admin se traen cada 15 minutos.');
 }

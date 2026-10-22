@@ -193,6 +193,22 @@ export function BotonAnular({ hoja, id, onListo, etiqueta }: { hoja: string; id:
   );
 }
 
+// ------------------------------------------------------------------ estudiantes del admin
+/** Trae de una vez los estudiantes y planes del admin (normalmente llegan solos cada 15 minutos). */
+export function TraerDelAdmin({ chico, texto = 'Traer estudiantes del admin', onListo }: { chico?: boolean; texto?: string; onListo?: () => void }) {
+  const { recargarCat, aviso } = useApp();
+  const { ocupado, correr } = useAccion();
+  const traer = async () => {
+    const r = await correr<{ resumen: string; nuevos: string[] }>('traerDelAdmin', {});
+    if (r) { aviso(r.nuevos.length ? `Del admin: ${r.resumen}. ${r.nuevos.map(n => n.replace(/^E\d+ /, '')).join(', ')}` : `Del admin: ${r.resumen}`); await recargarCat(); onListo?.(); }
+  };
+  return (
+    <button type="button" className={chico ? 'enlace' : 'btn secundario'} disabled={ocupado} onClick={traer}>
+      {ocupado ? <><span className="girando" aria-hidden /> Trayendo…</> : texto}
+    </button>
+  );
+}
+
 // ------------------------------------------------------------------ buscador de estudiantes
 export function BuscarQuien({ valor, onChange, permitirPersona = true, etiqueta = 'Estudiante' }: {
   valor: Quien; onChange: (q: Quien) => void; permitirPersona?: boolean; etiqueta?: string;
@@ -273,12 +289,13 @@ export function BuscarQuien({ valor, onChange, permitirPersona = true, etiqueta 
                 {e.nombre}{e.plan && <small>{e.plan}</small>}
               </button>
             ))}
-            {!resultados.length && <div className="vacio" style={{ padding: '10px 12px' }}>No aparece “{texto.trim()}”.</div>}
+            {!resultados.length && <div className="vacio" style={{ padding: '10px 12px' }}>No aparece “{texto.trim()}”.
+              {cat.admin_conectado && <><br /><TraerDelAdmin chico texto="¿Lo acabas de matricular? Traer del admin" /></>}</div>}
           </div>
         )}
       </div>
       <div className="chips" style={{ marginTop: 4 }}>
-        {texto.trim().length > 3 && !creando && (
+        {texto.trim().length > 3 && !creando && !cat.admin_conectado && (
           <button type="button" className="enlace" onClick={() => setCreando(true)}>+ Agregar “{texto.trim()}” como estudiante nuevo</button>
         )}
         {permitirPersona && <button type="button" className="enlace" onClick={() => { setModoPersona(true); setTexto(''); }}>No es estudiante</button>}
