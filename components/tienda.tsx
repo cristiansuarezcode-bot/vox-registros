@@ -2,12 +2,12 @@
 import { useMemo, useState } from 'react';
 import type { Quien } from '@/lib/tipos';
 import { hoy, norm, pesos } from '@/lib/util';
-import { BuscarQuien, Campo, Pantalla, Segmentado, cuentasBanco, datosQuien, useAccion, useApp } from './ui';
+import { BuscarQuien, Campo, Pantalla, Segmentado, cuentasBanco, datosQuien, useAccion, useApp, useSaldoFavor } from './ui';
 
 export function Tienda() {
   const { cat, aviso, ir, recargarCat } = useApp();
   const { ocupado, correr } = useAccion();
-  const metodos = (cat.listas.metodo_tienda || ['Efectivo', 'Transferencia', 'Fiado', 'Consumo interno']).map(String);
+  const metodos = [...(cat.listas.metodo_tienda || ['Efectivo', 'Transferencia', 'Fiado', 'Consumo interno']).map(String), 'Saldo a favor'];
   const internos = (cat.listas.consumo_interno || []).map(String);
   const [carrito, setCarrito] = useState<Record<string, number>>({});
   const [metodo, setMetodo] = useState('Efectivo');
@@ -24,15 +24,18 @@ export function Tienda() {
   const sumar = (id: string, d: number) => setCarrito(c => { const n = Math.max(0, (c[id] || 0) + d); const x = { ...c }; if (n) x[id] = n; else delete x[id]; return x; });
 
   const m = norm(metodo);
-  const listo = lineas.length && (m !== 'fiado' || quien) && (m !== 'consumo interno' || interno) && (m !== 'transferencia' || cuenta);
+  const conSaldo = m === 'saldo a favor';
+  const favor = useSaldoFavor(conSaldo ? quien : null);
+  const listo = lineas.length && (m !== 'fiado' || quien) && (m !== 'consumo interno' || interno) && (m !== 'transferencia' || cuenta)
+    && (!conSaldo || (quien && !favor.cargando && total <= favor.a_favor));
   const guardar = async () => {
     const datos: Record<string, unknown> = { fecha, metodo, lineas: lineas.map(l => ({ producto_id: l.id, cantidad: l.cantidad })) };
     if (m === 'transferencia') datos.recibido_en = cuenta;
-    if (m === 'fiado') Object.assign(datos, datosQuien(quien));
+    if (m === 'fiado' || conSaldo) Object.assign(datos, datosQuien(quien));
     if (m === 'consumo interno') datos.persona = interno;
     const r = await correr<{ venta: string; total: number }>('registrarVenta', datos);
     if (r) {
-      aviso(`Venta ${r.venta} guardada: ${pesos(r.total)}${m === 'fiado' ? ' fiado a ' + quien?.nombre : ''}`);
+      aviso(`Venta ${r.venta} guardada: ${pesos(r.total)}${m === 'fiado' ? ' fiado a ' + quien?.nombre : conSaldo ? ' con el saldo a favor de ' + quien?.nombre : ''}`);
       setCarrito({}); setQuien(null); setInterno(''); setMetodo('Efectivo'); setClave(k => k + 1);
       if (lineas.some(l => typeof l.stock === 'number')) recargarCat();
     }
@@ -81,6 +84,12 @@ export function Tienda() {
           <Campo label="¿Cómo pagó?"><Segmentado opciones={metodos} valor={metodo} onChange={setMetodo} /></Campo>
           {m === 'transferencia' && <div style={{ marginTop: 10 }}><Campo label="¿A qué cuenta?"><Segmentado opciones={cuentasBanco(cat).filter(c => c !== 'Caja')} valor={cuenta} onChange={setCuenta} /></Campo></div>}
           {m === 'fiado' && <div style={{ marginTop: 10 }} key={clave}><BuscarQuien valor={quien} onChange={setQuien} etiqueta="¿A quién se le fía?" /></div>}
+          {conSaldo && <div style={{ marginTop: 10 }} key={'s' + clave}>
+            <BuscarQuien valor={quien} onChange={setQuien} etiqueta="¿De quién es el saldo a favor?" />
+            {quien && <p className={'aviso ' + (favor.cargando ? 'info' : total > favor.a_favor ? 'error' : 'ok')}>
+              {favor.cargando ? 'Revisando su saldo a favor…' : favor.a_favor ? <>Tiene <b>{pesos(favor.a_favor)}</b> a favor{total > favor.a_favor ? ': no alcanza para esta compra.' : `. Después de la compra le quedan ${pesos(favor.a_favor - total)}.`}</> : 'No tiene saldo a favor.'}
+            </p>}
+          </div>}
           {m === 'consumo interno' && <div style={{ marginTop: 10 }}><Campo label="¿Quién lo consumió?"><Segmentado opciones={internos} valor={interno} onChange={setInterno} /></Campo></div>}
           <div style={{ marginTop: 10 }}><Campo label="Fecha"><input type="date" value={fecha} max={hoy()} onChange={e => setFecha(e.target.value)} /></Campo></div>
           <div className="acciones">

@@ -2,7 +2,7 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { Catalogos, Quien } from '@/lib/tipos';
 import { api, ErrorApi, escucharCarga } from '@/lib/api';
-import { norm, pesos, aNumero } from '@/lib/util';
+import { norm, pesos, aNumero, hoy } from '@/lib/util';
 
 // ------------------------------------------------------------------ contexto de la app
 export type Ctx = {
@@ -305,3 +305,107 @@ export function cuentaPorMetodo(metodo: string, cat: Catalogos) {
 }
 
 export const cuentasBanco = (cat: Catalogos) => cat.cuentas.map(c => c.nombre);
+
+
+// ------------------------------------------------------------------ descuentos
+export type ValorDescuento = { descuento: number; motivo: string };
+export const SIN_DESCUENTO: ValorDescuento = { descuento: 0, motivo: '' };
+
+/** Escoger un descuento de la lista (o uno a mano) sobre un valor base. Devuelve el descuento en pesos y su motivo. */
+export function SelectorDescuento({ concepto, base, valor, onChange }: { concepto: string; base: number; valor: ValorDescuento; onChange: (v: ValorDescuento) => void }) {
+  const { cat } = useApp();
+  const opciones = (cat.descuentos || []).filter(d => norm(d.aplica_a) === 'todos' || norm(d.aplica_a) === norm(concepto));
+  const [elegido, setElegido] = useState<string>(valor.descuento ? 'otro' : 'ninguno');
+  const [tipo, setTipo] = useState<'%' | '$'>('%');
+  const [cifra, setCifra] = useState(0);
+  const [motivo, setMotivo] = useState('');
+  const calcular = (t: string, v: number) => Math.min(base, Math.round(t === '%' ? (base * v) / 100 : v));
+  // Si cambia el valor base, se recalcula el descuento escogido.
+  useEffect(() => {
+    if (elegido === 'ninguno') return;
+    if (elegido === 'otro') { onChange({ descuento: calcular(tipo, cifra), motivo }); return; }
+    const d = opciones.find(o => o.id === elegido);
+    if (d) onChange({ descuento: calcular(d.tipo, d.valor), motivo: `${d.nombre} (${d.tipo === '%' ? d.valor + '%' : pesos(d.valor)})` });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [base]);
+  const escoger = (id: string) => {
+    setElegido(id);
+    if (id === 'ninguno') return onChange(SIN_DESCUENTO);
+    if (id === 'otro') return onChange({ descuento: calcular(tipo, cifra), motivo });
+    const d = opciones.find(o => o.id === id)!;
+    onChange({ descuento: calcular(d.tipo, d.valor), motivo: `${d.nombre} (${d.tipo === '%' ? d.valor + '%' : pesos(d.valor)})` });
+  };
+  const aMano = (t: '%' | '$', v: number, m: string) => { setTipo(t); setCifra(v); setMotivo(m); onChange({ descuento: calcular(t, v), motivo: m }); };
+  if (!base) return null;
+  return (
+    <div className="campo" style={{ gridColumn: '1 / -1' }}>
+      <label>Descuento</label>
+      <div className="segmentado">
+        <button type="button" className={elegido === 'ninguno' ? 'activo' : ''} onClick={() => escoger('ninguno')}>Sin descuento</button>
+        {opciones.map(o => <button type="button" key={o.id} className={elegido === o.id ? 'activo' : ''} onClick={() => escoger(o.id)}>{o.nombre} · {o.tipo === '%' ? o.valor + '%' : pesos(o.valor)}</button>)}
+        <button type="button" className={elegido === 'otro' ? 'activo' : ''} onClick={() => escoger('otro')}>Otro…</button>
+      </div>
+      {elegido === 'otro' && (
+        <div className="rejilla" style={{ marginTop: 8 }}>
+          <div className="campo"><label>Tipo</label><Segmentado opciones={['%', '$'] as const} valor={tipo} onChange={t => aMano(t, cifra, motivo)} /></div>
+          <div className="campo"><label>{tipo === '%' ? 'Porcentaje' : 'Valor'}</label>
+            {tipo === '%' ? <input type="number" inputMode="numeric" min={0} max={100} value={cifra || ''} onChange={e => aMano(tipo, Number(e.target.value), motivo)} />
+              : <Monto valor={cifra} onChange={v => aMano(tipo, v, motivo)} />}</div>
+          <div className="campo"><label>Motivo</label><input value={motivo} onChange={e => aMano(tipo, cifra, e.target.value)} placeholder="Ej: hermanos, beca, cortesía" /></div>
+        </div>
+      )}
+      {valor.descuento > 0 && <span className="ayuda">Descuento de <b>{pesos(valor.descuento)}</b> sobre {pesos(base)} → queda en <b>{pesos(base - valor.descuento)}</b>{!valor.motivo.trim() && ' · falta el motivo'}</span>}
+    </div>
+  );
+}
+
+export const datosDescuento = (v: ValorDescuento) => (v.descuento > 0 ? { descuento: v.descuento, motivo_descuento: v.motivo } : {});
+
+// ------------------------------------------------------------------ saldo a favor
+export type ItemSaldo = { origen: string; concepto: string; pedido: string; valor: number; pagado: number; saldo: number };
+
+export function useSaldoFavor(q: Quien) {
+  const [d, setD] = useState<{ a_favor: number; items: ItemSaldo[] } | null>(null);
+  const [n, setN] = useState(0);
+  const llave = q ? (q.estudiante_id || 'p:' + norm(q.persona)) : '';
+  useEffect(() => {
+    setD(null);
+    if (!q) return;
+    let vivo = true;
+    api<{ a_favor: number; items: ItemSaldo[] }>('saldosFavor', datosQuien(q)).then(r => vivo && setD(r)).catch(() => vivo && setD({ a_favor: 0, items: [] }));
+    return () => { vivo = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [llave, n]);
+  return { a_favor: d?.a_favor || 0, items: d?.items || [], cargando: !!q && !d, recargar: () => setN(x => x + 1) };
+}
+
+/** Devolverle plata a alguien que tiene saldo a favor en un concepto. */
+export function DevolverSaldo({ q, item, onCerrar, onListo }: { q: Quien; item: { concepto: string; pedido?: string; favor: number }; onCerrar: () => void; onListo: () => void }) {
+  const { cat } = useApp();
+  const metodos = cat.listas.metodo_pago.map(String);
+  const [valor, setValor] = useState(item.favor);
+  const [metodo, setMetodo] = useState('Efectivo');
+  const [desde, setDesde] = useState('Caja');
+  const [nota, setNota] = useState('');
+  const [fecha, setFecha] = useState(hoy());
+  const { ocupado, correr } = useAccion();
+  const guardar = async () => {
+    const r = await correr('registrarDevolucion', { ...datosQuien(q), concepto: item.concepto, pedido_uniforme: item.pedido || '', valor, metodo, pagado_desde: desde, nota, fecha },
+      `Devolución de ${pesos(valor)} a ${q?.nombre} registrada`);
+    if (r) onListo();
+  };
+  return (
+    <Modal titulo={`Devolver a ${q?.nombre}`} onCerrar={onCerrar}>
+      <p className="suave mt0" style={{ fontSize: 14 }}>Tiene <b>{pesos(item.favor)}</b> a favor en {item.concepto}{item.pedido ? ' ' + item.pedido : ''}.</p>
+      <div className="rejilla">
+        <Campo label="Valor a devolver"><Monto valor={valor} onChange={setValor} /></Campo>
+        <Campo label="Fecha"><input type="date" value={fecha} max={hoy()} onChange={e => setFecha(e.target.value)} /></Campo>
+        <Campo label="¿Cómo se le devolvió?" ancho><Segmentado opciones={metodos} valor={metodo} onChange={m => { setMetodo(m); setDesde(cuentaPorMetodo(m, cat)); }} /></Campo>
+        <Campo label="¿De dónde salió la plata?" ancho><Segmentado opciones={cuentasBanco(cat)} valor={desde} onChange={setDesde} /></Campo>
+        <Campo label="Nota (opcional)" ancho><input value={nota} onChange={e => setNota(e.target.value)} placeholder="Ej: se le devolvió a la mamá" /></Campo>
+      </div>
+      {valor > item.favor && <p className="aviso error">No puede ser más de {pesos(item.favor)}.</p>}
+      <div className="acciones"><button className="btn" disabled={ocupado || !valor || valor > item.favor} onClick={guardar}>{ocupado ? 'Guardando…' : `Devolver ${pesos(valor)}`}</button><button className="btn secundario" onClick={onCerrar}>Cancelar</button></div>
+    </Modal>
+  );
+}

@@ -1,6 +1,7 @@
 export type Estudiante = { id: string; nombre: string; plan: string };
 export type Producto = { id: string; nombre: string; precio: number; stock?: number | null };
 export type Plan = { id: string; nombre: string; valor_mensual: number };
+export type Descuento = { id: string; nombre: string; tipo: string; valor: number; aplica_a: string };
 export type PrendaCat = { id: string; nombre: string; precio: number; incluye: string[] };
 export type Concepto = { id: string; nombre: string; valor_base: number; usa_cargos: string };
 export type Profe = { id: string; nombre: string; valor_clase: number };
@@ -17,6 +18,7 @@ export type Catalogos = {
   cuentas: Cuenta[];
   cuentas_todas?: string[];
   planes?: Plan[];
+  descuentos?: Descuento[];
   cuenta_sugerida: string;
   listas: Record<string, (string | number)[]>;
 };

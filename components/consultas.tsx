@@ -2,13 +2,27 @@
 import { useMemo, useState, type ReactNode } from 'react';
 import type { Quien } from '@/lib/tipos';
 import { fechaCorta, hoy, norm, pesos, primeroDelMes } from '@/lib/util';
-import { BotonAnular, BuscarQuien, Campo, Cargando, ErrorCaja, Estado, Modal, Pantalla, Segmentado, Selector, useAccion, useApp, useDatos } from './ui';
+import { BotonAnular, BuscarQuien, Campo, Cargando, DevolverSaldo, ErrorCaja, Estado, Modal, Pantalla, Segmentado, Selector, SelectorDescuento, SIN_DESCUENTO, datosDescuento, useAccion, useApp, useDatos, type ValorDescuento } from './ui';
 
 const Lista = ({ datos, dinero = true }: { datos: Record<string, number>; dinero?: boolean }) => {
   const filas = Object.entries(datos || {}).sort((a, b) => b[1] - a[1]);
   if (!filas.length) return <p className="vacio">Nada.</p>;
   return <ul className="lista-simple">{filas.map(([k, v]) => <li key={k}><span>{k}</span><b className="monto">{dinero ? pesos(v) : v}</b></li>)}</ul>;
 };
+
+/** Botones para quien tiene saldo a favor: devolverle la plata o usarla en otra cosa. */
+function AccionesFavor({ estudiante_id, persona, nombre, concepto, pedido, favor, onListo }: { estudiante_id?: string; persona?: string; nombre: string; concepto: string; pedido?: string; favor: number; onListo: () => void }) {
+  const { ir } = useApp();
+  const [devolver, setDevolver] = useState(false);
+  const q = estudiante_id ? { estudiante_id, nombre } : { persona: persona || nombre, nombre };
+  return (
+    <span style={{ display: 'inline-flex', gap: 6, flexWrap: 'wrap', marginTop: 4 }}>
+      <button className="btn secundario chico" onClick={() => setDevolver(true)}>Devolver</button>
+      <button className="btn secundario chico" onClick={() => ir('pago', estudiante_id ? { estudiante_id, metodo: 'saldo' } : { persona: persona || nombre, metodo: 'saldo' })}>Usar en otro pago</button>
+      {devolver && <DevolverSaldo q={q} item={{ concepto, pedido, favor }} onCerrar={() => setDevolver(false)} onListo={() => { setDevolver(false); onListo(); }} />}
+    </span>
+  );
+}
 
 const Cifra = ({ t, v, destacada }: { t: string; v: ReactNode; destacada?: boolean }) => <div className={'cifra' + (destacada ? ' destacada' : '')}><span>{t}</span><b>{v}</b></div>;
 
@@ -119,7 +133,7 @@ function SaldosConcepto({ concepto, filtro, buscar }: { concepto: string; filtro
           <span className="suave" style={{ fontSize: 13 }}>El cargo es lo que debe pagar cada estudiante{base ? ` (${pesos(base)} por montaje)` : ''}.</span>
         </div>}
         {!filas.length ? <p className="vacio">No hay registros con este filtro.</p> : (
-          <div className="tabla-envoltura"><table className="tabla">
+          <div className="tabla-envoltura"><table className="tabla tarjetas">
             <thead><tr>
               <th>{esUniforme ? 'Pedido' : 'Estudiante'}</th>
               {!esUniforme && <th className="num">Montajes</th>}
@@ -132,41 +146,47 @@ function SaldosConcepto({ concepto, filtro, buscar }: { concepto: string; filtro
                   <td>{f.estudiante_id ? <button className="enlace" onClick={() => ir('ficha', { estudiante_id: f.estudiante_id })}>{f.quien}</button> : f.quien}
                     {esUniforme && <><br /><small className="suave">{f.pedido} · {fechaCorta(f.fecha || '')}</small></>}
                     {f.sin_cargo && <><br /><small className="suave">Pagó pero no tiene cargo</small></>}</td>
-                  {!esUniforme && <td className="num">{f.cantidad || '—'}</td>}
-                  <td className="num">{pesos(f.valor)}</td>
-                  <td className="num">{pesos(f.pagado)}</td>
-                  <td><Estado saldo={f.saldo} /></td>
-                  {esUniforme ? <td style={{ fontSize: 13 }}>{(f.prendas_pendientes || []).join(', ') || '—'}</td>
-                    : <td>{f.cargo ? <button className="enlace" onClick={() => setEditar(f)}>Editar</button> : f.estudiante_id && <button className="enlace" onClick={() => setNuevo(true)}>Crear cargo</button>}</td>}
+                  {!esUniforme && <td className="num" data-label="Montajes">{f.cantidad || '—'}</td>}
+                  <td className="num" data-label="Valor">{pesos(f.valor)}</td>
+                  <td className="num" data-label="Pagado">{pesos(f.pagado)}</td>
+                  <td data-label="Estado"><Estado saldo={f.saldo} /></td>
+                  {esUniforme ? <td style={{ fontSize: 13 }} data-label="Pendiente de entregar">{(f.prendas_pendientes || []).join(', ') || '—'}
+                      {f.saldo < 0 && <><br /><AccionesFavor estudiante_id={f.estudiante_id} nombre={f.quien} concepto="Uniforme" pedido={f.pedido} favor={-f.saldo} onListo={recargar} /></>}</td>
+                    : <td>{f.cargo ? <button className="enlace" onClick={() => setEditar(f)}>Editar</button> : f.estudiante_id && <button className="enlace" onClick={() => setNuevo(true)}>Crear cargo</button>}
+                      {f.saldo < 0 && f.estudiante_id && <><br /><AccionesFavor estudiante_id={f.estudiante_id} nombre={f.quien} concepto={concepto} favor={-f.saldo} onListo={recargar} /></>}</td>}
                 </tr>
               ))}
             </tbody>
           </table></div>
         )}
       </div>
-      {editar && <EditarCargo fila={editar} base={base} onCerrar={() => setEditar(null)} onListo={() => { setEditar(null); recargar(); }} />}
+      {editar && <EditarCargo fila={editar} base={base} concepto={concepto} onCerrar={() => setEditar(null)} onListo={() => { setEditar(null); recargar(); }} />}
       {nuevo && <NuevoCargo concepto={concepto} base={base} onCerrar={() => setNuevo(false)} onListo={() => { setNuevo(false); recargar(); }} />}
     </>
   );
 }
 
-function EditarCargo({ fila, base, onCerrar, onListo }: { fila: FilaSaldo; base: number; onCerrar: () => void; onListo: () => void }) {
+function EditarCargo({ fila, base, concepto, onCerrar, onListo }: { fila: FilaSaldo; base: number; concepto: string; onCerrar: () => void; onListo: () => void }) {
   const [cantidad, setCantidad] = useState(fila.cantidad || 1);
   const [nota, setNota] = useState('');
+  const [desc, setDesc] = useState<ValorDescuento>(SIN_DESCUENTO);
+  const [tocoDesc, setTocoDesc] = useState(false);
   const { ocupado, correr } = useAccion();
   const guardar = async () => {
     const datos: Record<string, unknown> = { id: fila.cargo, cantidad };
+    if (tocoDesc) Object.assign(datos, desc.descuento ? datosDescuento(desc) : { descuento: 0 });
     if (nota.trim()) datos.nota = nota;
     if (await correr('editarCargo', datos, 'Cargo actualizado')) onListo();
   };
   return (
     <Modal titulo={`Cargo de ${fila.quien}`} onCerrar={onCerrar}>
       <div className="rejilla">
-        <Campo label="Montajes" ayuda={base ? `Nuevo valor: ${pesos(cantidad * base)}` : undefined}><input type="number" min={1} value={cantidad} onChange={e => setCantidad(Number(e.target.value))} /></Campo>
+        <Campo label="Montajes" ayuda={base ? `Valor: ${pesos(cantidad * base - (tocoDesc ? desc.descuento : 0))}${!tocoDesc && fila.valor !== (fila.cantidad || 1) * base ? ' (conserva su descuento actual)' : ''}` : undefined}><input type="number" min={1} value={cantidad} onChange={e => setCantidad(Number(e.target.value))} /></Campo>
+        {base > 0 && <SelectorDescuento concepto={concepto} base={cantidad * base} valor={desc} onChange={d => { setDesc(d); setTocoDesc(true); }} />}
         <Campo label="Nota (opcional)" ancho><input value={nota} onChange={e => setNota(e.target.value)} placeholder="Ej: se unió a contempo" /></Campo>
       </div>
       <p className="suave" style={{ fontSize: 13 }}>El cambio queda en la bitácora con el valor anterior.</p>
-      <div className="acciones"><button className="btn" disabled={ocupado || cantidad < 1} onClick={guardar}>Guardar</button><button className="btn secundario" onClick={onCerrar}>Cancelar</button></div>
+      <div className="acciones"><button className="btn" disabled={ocupado || cantidad < 1 || (tocoDesc && desc.descuento > 0 && !desc.motivo.trim())} onClick={guardar}>Guardar</button><button className="btn secundario" onClick={onCerrar}>Cancelar</button></div>
     </Modal>
   );
 }
@@ -175,18 +195,20 @@ function NuevoCargo({ concepto, base, onCerrar, onListo }: { concepto: string; b
   const [quien, setQuien] = useState<Quien>(null);
   const [cantidad, setCantidad] = useState(1);
   const [nota, setNota] = useState('');
+  const [desc, setDesc] = useState<ValorDescuento>(SIN_DESCUENTO);
   const { ocupado, correr } = useAccion();
   const guardar = async () => {
-    if (await correr('registrarCargo', { estudiante_id: quien?.estudiante_id, concepto, cantidad, nota }, 'Cargo agregado')) onListo();
+    if (await correr('registrarCargo', { estudiante_id: quien?.estudiante_id, concepto, cantidad, nota, ...datosDescuento(desc) }, 'Cargo agregado')) onListo();
   };
   return (
     <Modal titulo={`Nuevo cargo · ${concepto}`} onCerrar={onCerrar}>
       <BuscarQuien valor={quien} onChange={setQuien} permitirPersona={false} />
       <div className="rejilla" style={{ marginTop: 10 }}>
-        <Campo label="Montajes" ayuda={base ? `Valor: ${pesos(cantidad * base)}` : undefined}><input type="number" min={1} value={cantidad} onChange={e => setCantidad(Number(e.target.value))} /></Campo>
+        <Campo label="Montajes" ayuda={base ? `Valor: ${pesos(cantidad * base - desc.descuento)}` : undefined}><input type="number" min={1} value={cantidad} onChange={e => setCantidad(Number(e.target.value))} /></Campo>
         <Campo label="Nota (opcional)"><input value={nota} onChange={e => setNota(e.target.value)} /></Campo>
+        {base > 0 && <SelectorDescuento concepto={concepto} base={cantidad * base} valor={desc} onChange={setDesc} />}
       </div>
-      <div className="acciones"><button className="btn" disabled={ocupado || !quien?.estudiante_id || cantidad < 1} onClick={guardar}>Agregar</button><button className="btn secundario" onClick={onCerrar}>Cancelar</button></div>
+      <div className="acciones"><button className="btn" disabled={ocupado || !quien?.estudiante_id || cantidad < 1 || (desc.descuento > 0 && !desc.motivo.trim())} onClick={guardar}>Agregar</button><button className="btn secundario" onClick={onCerrar}>Cancelar</button></div>
     </Modal>
   );
 }
@@ -204,11 +226,12 @@ function SaldosTienda({ filtro, buscar }: { filtro: string; buscar: string }) {
       <div className="tarjeta">
         <p className="suave mt0" style={{ fontSize: 13 }}>Para registrar que alguien pagó lo fiado, usa <b>Registrar pago</b> con el concepto <b>Cuenta tienda</b>.</p>
         {!filas.length ? <p className="vacio">Nadie con este filtro.</p> : (
-          <div className="tabla-envoltura"><table className="tabla">
+          <div className="tabla-envoltura"><table className="tabla tarjetas">
             <thead><tr><th>Quién</th><th className="num">Fiado</th><th className="num">Pagado</th><th>Estado</th></tr></thead>
             <tbody>{filas.map((f, i) => <tr key={i}>
               <td>{f.estudiante_id ? <button className="enlace" onClick={() => ir('ficha', { estudiante_id: f.estudiante_id })}>{f.quien}</button> : f.quien}</td>
-              <td className="num">{pesos(f.fiado)}</td><td className="num">{pesos(f.pagado)}</td><td><Estado saldo={f.saldo} /></td></tr>)}</tbody>
+              <td className="num" data-label="Fiado">{pesos(f.fiado)}</td><td className="num" data-label="Pagado">{pesos(f.pagado)}</td><td data-label="Estado"><Estado saldo={f.saldo} />
+                {f.saldo < 0 && <><br /><AccionesFavor estudiante_id={f.estudiante_id || undefined} persona={f.estudiante_id ? undefined : f.quien} nombre={f.quien} concepto="Cuenta tienda" favor={-f.saldo} onListo={recargar} /></>}</td></tr>)}</tbody>
           </table></div>
         )}
       </div>
@@ -263,6 +286,8 @@ type FichaCompleta = {
   pedidos: { id: string; fecha: string; valor: number; pagado: number; saldo: number; prendas: { prenda: string; talla: string; estado: string }[] }[];
   tienda: { fiado: number; pagado: number; saldo: number } | null;
   pagos: Record<string, any>[];
+  a_favor?: { origen: string; concepto: string; pedido: string; saldo: number }[];
+  total_a_favor?: number;
 };
 export function Ficha() {
   const { params, cat, ir } = useApp();
@@ -282,6 +307,17 @@ function FichaDe({ id }: { id: string }) {
   if (!d) return null;
   return (
     <>
+      {(d.total_a_favor || 0) > 0 && (
+        <div className="tarjeta" style={{ borderLeft: '4px solid var(--favor)' }}>
+          <h3>Saldo a favor: {pesos(d.total_a_favor || 0)}</h3>
+          <ul className="lista-simple">{(d.a_favor || []).map((x, i) => (
+            <li key={i} style={{ flexWrap: 'wrap', alignItems: 'center' }}>
+              <span>{x.concepto}{x.pedido ? ' ' + x.pedido : ''}: <b>{pesos(-x.saldo)}</b></span>
+              <AccionesFavor estudiante_id={d.estudiante.id} nombre={d.estudiante.nombre} concepto={x.concepto} pedido={x.pedido} favor={-x.saldo} onListo={recargar} />
+            </li>))}
+          </ul>
+        </div>
+      )}
       <div className="rejilla">
         <div className="tarjeta"><h3>Cargos</h3>
           {!d.cargos.length ? <p className="vacio">Sin cargos.</p> : <ul className="lista-simple">{d.cargos.map(c => <li key={c.id}><span>{c.concepto}{c.cantidad > 1 ? ` (${c.cantidad})` : ''}<br /><small className="suave">{pesos(c.pagado)} de {pesos(c.valor)}</small></span><Estado saldo={c.saldo} /></li>)}</ul>}
@@ -294,10 +330,10 @@ function FichaDe({ id }: { id: string }) {
         <div className="tarjeta"><h3>Tienda</h3>{d.tienda ? <ul className="lista-simple"><li><span>Fiado {pesos(d.tienda.fiado)} · pagado {pesos(d.tienda.pagado)}</span><Estado saldo={d.tienda.saldo} /></li></ul> : <p className="vacio">Al día en la tienda.</p>}</div>
       </div>
       <div className="tarjeta"><h3>Pagos</h3>
-        {!d.pagos.length ? <p className="vacio">No hay pagos registrados.</p> : <div className="tabla-envoltura"><table className="tabla">
-          <thead><tr><th>Fecha</th><th>Concepto</th><th className="num">Valor</th><th>Método</th><th>Entró a</th><th></th></tr></thead>
+        {!d.pagos.length ? <p className="vacio">No hay pagos registrados.</p> : <div className="tabla-envoltura"><table className="tabla tarjetas">
+          <thead><tr><th>Fecha</th><th>Concepto</th><th className="num">Valor</th><th>Método</th><th>Cuenta</th><th></th></tr></thead>
           <tbody>{d.pagos.map(p => <tr key={p.id} className={p.estado === 'anulado' ? 'anulado' : ''}>
-            <td>{fechaCorta(p.fecha)}</td><td>{p.concepto}{p.nota && <><br /><small className="suave">{p.nota}</small></>}</td><td className="num">{pesos(p.valor)}</td><td>{p.metodo}</td><td>{p.recibido_en}</td>
+            <td data-label="Fecha">{fechaCorta(p.fecha)}</td><td data-label="Concepto"><b>{p.concepto}</b>{p.descuento ? <><br /><small className="suave">Descuento {pesos(p.descuento)}: {p.motivo_descuento}</small></> : null}{p.nota && <><br /><small className="suave">{p.nota}</small></>}</td><td className="num" data-label="Valor">{pesos(p.valor)}</td><td data-label="Método">{p.metodo}</td><td data-label="Cuenta">{p.recibido_en || '—'}</td>
             <td className="sin-tachar">{p.estado === 'anulado' ? <span className="chip anulado" title={p.motivo_anulacion}>Anulado</span> : <BotonAnular hoja="Pagos" id={p.id} onListo={recargar} />}</td></tr>)}</tbody>
         </table></div>}
       </div>
@@ -362,7 +398,7 @@ export function ReporteProfes() {
 
 // ------------------------------------------------------------------ historial y anulaciones
 const HOJAS: Record<string, { cols: [string, string][]; grupo?: string; anulable: boolean }> = {
-  'Pagos': { cols: [['fecha', 'Fecha'], ['quien', 'Quién'], ['concepto', 'Concepto'], ['valor', 'Valor'], ['metodo', 'Método'], ['recibido_en', 'Entró a']], anulable: true },
+  'Pagos': { cols: [['fecha', 'Fecha'], ['quien', 'Quién'], ['concepto', 'Concepto'], ['valor', 'Valor'], ['metodo', 'Método'], ['recibido_en', 'Cuenta'], ['tipo', 'Tipo']], anulable: true },
   'Ventas tienda': { cols: [['fecha', 'Fecha'], ['venta', 'Venta'], ['producto', 'Producto'], ['cantidad', 'Cant.'], ['total', 'Total'], ['metodo', 'Método'], ['quien', 'Quién']], grupo: 'venta', anulable: true },
   'Pedidos uniforme': { cols: [['fecha', 'Fecha'], ['id', 'Pedido'], ['quien', 'Quién'], ['valor_acordado', 'Valor']], anulable: true },
   'Pago profes': { cols: [['fecha', 'Fecha'], ['pago', 'Pago'], ['profe', 'Profe'], ['periodo', 'Periodo'], ['clases', 'Clases'], ['total', 'Total']], grupo: 'pago', anulable: true },

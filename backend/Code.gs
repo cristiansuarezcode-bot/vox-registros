@@ -16,7 +16,7 @@
 // Hoja de cálculo que sirve de base de datos (Registros Vox Corpus Danza, cuenta voxcorpusdanza@gmail.com).
 const HOJA_ID = '1XWxLoazHg4dCTqvaM0E2ZQYFzcL0XjNFcp_xQ4B51p0';
 const TZ = 'America/Bogota';
-const VERSION = '1.2.0';
+const VERSION = '1.3.0';
 const SESION_SEG = 6 * 60 * 60;          // máximo que permite CacheService
 const INTENTOS_MAX = 5;                  // claves erradas antes de bloquear
 const BLOQUEO_SEG = 15 * 60;
@@ -26,14 +26,20 @@ const H = {
   PRENDAS: 'Prendas del pedido', PAGO_PROFES: 'Pago profes', GASTOS: 'Gastos', TRASLADOS: 'Traslados',
   ESTUDIANTES: 'Estudiantes', PRODUCTOS: 'Productos', CAT_PRENDAS: 'Prendas uniforme', CONCEPTOS: 'Conceptos',
   PROFES: 'Profes', CUENTAS: 'Cuentas', LISTAS: 'Listas', USUARIOS: 'Usuarios', BITACORA: 'Bitácora',
-  INVENTARIO: 'Inventario', PLANES: 'Planes',
+  INVENTARIO: 'Inventario', PLANES: 'Planes', DESCUENTOS: 'Descuentos',
 };
+const SALDO_FAVOR = 'Saldo a favor';
 
 // Pestañas que configurar() crea si no existen.
 const HOJAS_NUEVAS = {
   'Inventario': ['id', 'fecha', 'producto_id', 'producto', 'tipo', 'cantidad', 'costo_unitario', 'nota',
     'registrado_por', 'registrado_en', 'estado', 'motivo_anulacion', 'anulado_por', 'anulado_en'],
   'Planes': ['id', 'nombre', 'valor_mensual', 'activo', 'nota'],
+  'Descuentos': ['id', 'nombre', 'tipo', 'valor', 'aplica_a', 'activo', 'nota'],
+};
+// Filas con que nace una pestaña nueva.
+const SEMILLAS = {
+  'Descuentos': [['DS01', 'Uniforme el día de la matrícula', '%', 5, 'Uniforme', 'Sí', '5% si compra el uniforme el mismo día que se matricula']],
 };
 const TIPOS_INVENTARIO = ['Entrada', 'Conteo', 'Salida'];
 
@@ -45,10 +51,10 @@ const ANULABLES = {
 
 // Columnas que configurar() agrega si la hoja no las tiene.
 const COLUMNAS_EXTRA = {
-  'Pagos': ['anulado_por', 'anulado_en'],
-  'Cargos': ['anulado_por', 'anulado_en', 'actualizado_por', 'actualizado_en'],
+  'Pagos': ['anulado_por', 'anulado_en', 'tipo', 'descuento', 'motivo_descuento', 'relacionado'],
+  'Cargos': ['anulado_por', 'anulado_en', 'actualizado_por', 'actualizado_en', 'descuento', 'motivo_descuento'],
   'Ventas tienda': ['recibido_en', 'anulado_por', 'anulado_en'],
-  'Pedidos uniforme': ['anulado_por', 'anulado_en'],
+  'Pedidos uniforme': ['anulado_por', 'anulado_en', 'valor_lista', 'descuento', 'motivo_descuento'],
   'Pago profes': ['anulado_por', 'anulado_en'],
   'Gastos': ['anulado_por', 'anulado_en'],
   'Traslados': ['anulado_por', 'anulado_en'],
@@ -116,6 +122,10 @@ const ACCIONES = {
   restablecerClave:    [restablecerClave_, true],
   listarUsuarios:      [listarUsuarios_, false],
   listarProfes:        [listarProfes_, false],
+  saldosFavor:         [saldosFavor_, false],
+  registrarDevolucion: [registrarDevolucion_, true],
+  listarDescuentos:    [listarDescuentos_, false],
+  guardarDescuento:    [guardarDescuento_, true],
   guardarProfe:        [guardarProfe_, true],
 };
 
@@ -205,6 +215,7 @@ function catalogos_(d, ses) {
     productos: (() => { const st = stocks_(); return activos_(H.PRODUCTOS).map(f => ({ id: f.id, nombre: f.nombre, precio: num_(f.precio),
       stock: st[f.id] ? st[f.id].stock : null })); })(),
     planes: hojaExiste_(H.PLANES) ? activos_(H.PLANES).map(f => ({ id: f.id, nombre: f.nombre, valor_mensual: num_(f.valor_mensual) })) : [],
+    descuentos: hojaExiste_(H.DESCUENTOS) ? activos_(H.DESCUENTOS).map(f => ({ id: f.id, nombre: f.nombre, tipo: String(f.tipo), valor: num_(f.valor), aplica_a: String(f.aplica_a || 'Todos') })) : [],
     prendas: activos_(H.CAT_PRENDAS).map(f => ({ id: f.id, nombre: f.nombre, precio: num_(f.precio),
       incluye: String(f.incluye || f.nombre).split(',').map(s => s.trim()).filter(Boolean) })),
     conceptos: activos_(H.CONCEPTOS).map(f => ({ id: f.id, nombre: f.nombre, valor_base: num_(f.valor_base), usa_cargos: String(f.usa_cargos || '') })),
@@ -238,33 +249,41 @@ function cuentaSugerida_(fecha) {
 function registrarPago_(d, ses) {
   const q = quien_(d);
   const concepto = concepto_(d.concepto);
-  const metodo = enLista_(d.metodo, 'metodo_pago', 'método de pago');
-  const p = {
+  const conSaldo = esSaldo_(d.metodo);
+  const metodo = conSaldo ? SALDO_FAVOR : enLista_(d.metodo, 'metodo_pago', 'método de pago');
+  const p = Object.assign({
     fecha: fecha_(d.fecha), estudiante_id: q.estudiante_id, estudiante: q.estudiante, persona: q.persona,
     concepto: concepto.nombre, valor: monto_(d.valor), metodo: metodo,
-    recibido_en: cuentaActiva_(d.recibido_en, 'recibido en'), pedido_uniforme: '', nota: texto_(d.nota),
-  };
+    recibido_en: conSaldo ? '' : cuentaActiva_(d.recibido_en, 'recibido en'), pedido_uniforme: '', nota: texto_(d.nota),
+    tipo: conSaldo ? 'Pago con saldo a favor' : '',
+  }, descuento_(d, null));
   if (norm_(concepto.nombre) === 'uniforme') {
     const ped = buscarValido_(H.PEDIDOS, d.pedido_uniforme, 'pedido de uniforme');
     p.pedido_uniforme = ped.id;
   }
   p.id = siguienteId_(H.PAGOS, 'id', 'P', 4);
-  insertar_(H.PAGOS, [auditar_(p, ses)]);
-  bitacora_(ses, 'registrarPago', H.PAGOS, p.id, p);
-  return { id: p.id };
+  let filas = [auditar_(p, ses)];
+  if (conSaldo) filas = filas.concat(consumirSaldo_(q, p.valor, { concepto: p.concepto, pedido: p.pedido_uniforme }, p.fecha, ses,
+    'Usado para pagar ' + p.concepto + (p.pedido_uniforme ? ' ' + p.pedido_uniforme : ''), numeroId_(p.id) + 1, p.id));
+  insertar_(H.PAGOS, filas);
+  bitacora_(ses, 'registrarPago', H.PAGOS, p.id, Object.assign({}, p, { saldo_usado_de: filas.slice(1).map(f => f.concepto + ' ' + f.valor) }));
+  return { id: p.id, movimientos: filas.length };
 }
 
 function registrarCargo_(d, ses) {
   const q = quien_(d, true);
   const concepto = concepto_(d.concepto);
   const cantidad = entero_(d.cantidad === undefined ? 1 : d.cantidad, 'cantidad');
-  const valor = d.valor_total !== undefined && d.valor_total !== '' ? monto_(d.valor_total, true)
+  const bruto = d.valor_total !== undefined && d.valor_total !== '' ? monto_(d.valor_total, true)
     : (concepto.valor_base ? cantidad * concepto.valor_base : null);
-  if (valor === null) throw err_('Este concepto no tiene valor base: escribe el valor total.');
+  if (bruto === null) throw err_('Este concepto no tiene valor base: escribe el valor total.');
+  const desc = descuento_(d, bruto);
+  const valor = bruto - num_(desc.descuento);
   const ya = tabla_(H.CARGOS).filas.find(f => f.estudiante_id === q.estudiante_id && norm_(f.concepto) === norm_(concepto.nombre) && esValido_(f));
   if (ya) throw err_(q.estudiante + ' ya tiene un cargo de ' + concepto.nombre + ' (' + ya.id + '). Edítalo en vez de crear otro.', 'duplicado');
   const c = { id: siguienteId_(H.CARGOS, 'id', 'C', 3), estudiante_id: q.estudiante_id, estudiante: q.estudiante,
-    concepto: concepto.nombre, cantidad: cantidad, valor_total: valor, nota: texto_(d.nota) };
+    concepto: concepto.nombre, cantidad: cantidad, valor_total: valor, nota: texto_(d.nota),
+    descuento: desc.descuento, motivo_descuento: desc.motivo_descuento };
   insertar_(H.CARGOS, [auditar_(c, ses)]);
   bitacora_(ses, 'registrarCargo', H.CARGOS, c.id, c);
   return { id: c.id };
@@ -277,11 +296,15 @@ function editarCargo_(d, ses) {
   if (!esValido_(c)) throw err_('Ese cargo está anulado.');
   const concepto = concepto_(c.concepto);
   const cambios = {};
-  if (d.cantidad !== undefined) {
-    cambios.cantidad = entero_(d.cantidad, 'cantidad');
-    if (d.valor_total === undefined && concepto.valor_base) cambios.valor_total = cambios.cantidad * concepto.valor_base;
-  }
+  // El descuento se mantiene salvo que se envíe uno nuevo (0 lo quita).
+  const desc = d.descuento !== undefined ? descuento_(d, null) : null;
+  const descV = desc ? num_(desc.descuento) : num_(c.descuento);
+  if (desc) { cambios.descuento = desc.descuento; cambios.motivo_descuento = desc.motivo_descuento; }
+  if (d.cantidad !== undefined) cambios.cantidad = entero_(d.cantidad, 'cantidad');
   if (d.valor_total !== undefined) cambios.valor_total = monto_(d.valor_total, true);
+  else if ((d.cantidad !== undefined || desc) && concepto.valor_base) cambios.valor_total = (cambios.cantidad || num_(c.cantidad) || 1) * concepto.valor_base - descV;
+  else if (desc) cambios.valor_total = num_(c.valor_total) + num_(c.descuento) - descV;
+  if (cambios.valor_total !== undefined && cambios.valor_total < 0) throw err_('El descuento no puede ser mayor que el valor.');
   if (d.nota !== undefined) cambios.nota = texto_(d.nota);
   if (!Object.keys(cambios).length) throw err_('No hay cambios para guardar.');
   cambios.actualizado_por = ses.nombre;
@@ -294,11 +317,12 @@ function editarCargo_(d, ses) {
 }
 
 function registrarVenta_(d, ses) {
-  const metodo = enLista_(d.metodo, 'metodo_tienda', 'método');
+  const conSaldo = esSaldo_(d.metodo);
+  const metodo = conSaldo ? SALDO_FAVOR : enLista_(d.metodo, 'metodo_tienda', 'método');
   const lineas = arreglo_(d.lineas, 'productos', 40);
   const prods = indice_(activos_(H.PRODUCTOS));
   let q = { estudiante_id: '', estudiante: '', persona: '' };
-  if (norm_(metodo) === 'fiado') q = quien_(d);
+  if (norm_(metodo) === 'fiado' || conSaldo) q = quien_(d);
   if (norm_(metodo) === 'consumo interno') q.persona = enLista_(d.persona, 'consumo_interno', 'quién consumió');
   let recibido = '';
   if (norm_(metodo) === 'efectivo') recibido = 'Caja';
@@ -317,14 +341,32 @@ function registrarVenta_(d, ses) {
       cantidad: cant, precio: precio, total: cant * precio, metodo: metodo, recibido_en: recibido,
       estudiante_id: q.estudiante_id, estudiante: q.estudiante, persona: q.persona, nota: texto_(d.nota) }, ses);
   });
+  // Con saldo a favor: primero se usa lo que tenga a favor en la tienda; lo que falte se pasa desde otros conceptos.
+  let pagos = [];
+  if (conSaldo) {
+    const tienda = saldosDe_(q).items.find(i => i.origen === 'tienda');
+    const enTienda = tienda && tienda.saldo < 0 ? -tienda.saldo : 0;
+    const resto = total - Math.min(total, enTienda);
+    if (resto > 0) {
+      const pid = siguienteId_(H.PAGOS, 'id', 'P', 4);
+      const p = auditar_({ id: pid, fecha: fecha, estudiante_id: q.estudiante_id, estudiante: q.estudiante, persona: q.persona,
+        concepto: concepto_('Cuenta tienda').nombre, valor: resto, metodo: SALDO_FAVOR, recibido_en: '', pedido_uniforme: '',
+        nota: 'Compra ' + venta + ' en la tienda', tipo: 'Pago con saldo a favor', relacionado: venta }, ses);
+      pagos = [p].concat(consumirSaldo_(q, resto, { concepto: 'Cuenta tienda', pedido: '' }, fecha, ses, 'Usado en la tienda (' + venta + ')', numeroId_(pid) + 1, venta));
+    }
+  }
   insertar_(H.VENTAS, filas);
-  bitacora_(ses, 'registrarVenta', H.VENTAS, venta, { metodo: metodo, total: total, lineas: filas.length, quien: q.estudiante || q.persona });
+  if (pagos.length) insertar_(H.PAGOS, pagos);
+  bitacora_(ses, 'registrarVenta', H.VENTAS, venta, { metodo: metodo, total: total, lineas: filas.length, quien: q.estudiante || q.persona, pagos_saldo: pagos.map(p => p.id) });
   return { venta: venta, total: total, lineas: filas.length };
 }
 
 function crearPedido_(d, ses) {
   const q = quien_(d);
-  const valor = monto_(d.valor_acordado, true);
+  const lista = d.valor_lista !== undefined && d.valor_lista !== '' && d.valor_lista !== null ? monto_(d.valor_lista, true) : null;
+  const desc = descuento_(d, lista);
+  const valor = lista !== null ? lista - num_(desc.descuento) : monto_(d.valor_acordado, true) - num_(desc.descuento);
+  if (valor < 0) throw err_('El descuento no puede ser mayor que el valor.');
   const piezas = nombresPiezas_();
   const prendas = arreglo_(d.prendas, 'prendas', 20);
   const estados = listas_().estado_prenda || [];
@@ -340,16 +382,21 @@ function crearPedido_(d, ses) {
       actualizado_por: ses.nombre, actualizado_en: new Date() };
   });
   const ped = { id: pid, fecha: fecha, estudiante_id: q.estudiante_id, estudiante: q.estudiante, persona: q.persona,
-    valor_acordado: valor, nota: texto_(d.nota) };
+    valor_acordado: valor, nota: texto_(d.nota), valor_lista: lista !== null ? lista : '', descuento: desc.descuento, motivo_descuento: desc.motivo_descuento };
   insertar_(H.PEDIDOS, [auditar_(ped, ses)]);
   insertar_(H.PRENDAS, lineas);
   let pago = null;
   if (d.pago && d.pago.valor) {
-    const metodo = enLista_(d.pago.metodo, 'metodo_pago', 'método de pago');
+    const conSaldo = esSaldo_(d.pago.metodo);
+    const metodo = conSaldo ? SALDO_FAVOR : enLista_(d.pago.metodo, 'metodo_pago', 'método de pago');
+    if (monto_(d.pago.valor) > valor) throw err_('El abono es mayor que el valor del pedido.');
     pago = { id: siguienteId_(H.PAGOS, 'id', 'P', 4), fecha: fecha, estudiante_id: q.estudiante_id, estudiante: q.estudiante,
       persona: q.persona, concepto: concepto_('Uniforme').nombre, valor: monto_(d.pago.valor), metodo: metodo,
-      recibido_en: cuentaActiva_(d.pago.recibido_en, 'recibido en'), pedido_uniforme: pid, nota: texto_(d.pago.nota) };
-    insertar_(H.PAGOS, [auditar_(pago, ses)]);
+      recibido_en: conSaldo ? '' : cuentaActiva_(d.pago.recibido_en, 'recibido en'), pedido_uniforme: pid, nota: texto_(d.pago.nota),
+      tipo: conSaldo ? 'Pago con saldo a favor' : '' };
+    let filas = [auditar_(pago, ses)];
+    if (conSaldo) filas = filas.concat(consumirSaldo_(q, pago.valor, { concepto: 'Uniforme', pedido: pid }, fecha, ses, 'Usado para el uniforme ' + pid, numeroId_(pago.id) + 1, pago.id));
+    insertar_(H.PAGOS, filas);
   }
   bitacora_(ses, 'crearPedido', H.PEDIDOS, pid, { pedido: ped, prendas: lineas.length, pago: pago && pago.id });
   return { id: pid, prendas: lineas.map(l => l.id), pago: pago && pago.id };
@@ -444,9 +491,18 @@ function anular_(d, ses) {
   const filas = t.filas.filter(f => f.id === d.id || (grupo && f[grupo] === d.id));
   if (!filas.length) throw err_('No encontré el registro ' + d.id);
   if (!filas.some(esValido_)) throw err_('Ese registro ya estaba anulado.');
+  if (hoja === H.PAGOS && filas.some(f => f.tipo === 'Saldo usado' && f.relacionado))
+    throw err_('Este movimiento es parte de un pago con saldo a favor (' + filas[0].relacionado + '). Anula ese pago y se devuelve todo.');
   const ahora = new Date();
   filas.filter(esValido_).forEach(f => actualizar_(t, f, { estado: 'anulado', motivo_anulacion: motivo, anulado_por: ses.nombre, anulado_en: ahora }));
   const avisos = [];
+  // Lo que se usó del saldo a favor para este pago o venta vuelve a quedar disponible.
+  if (hoja === H.PAGOS || hoja === H.VENTAS) {
+    const tp = tabla_(H.PAGOS);
+    const ligados = tp.filas.filter(p => esValido_(p) && p.relacionado && p.relacionado === d.id);
+    ligados.forEach(p => actualizar_(tp, p, { estado: 'anulado', motivo_anulacion: 'Se anuló ' + d.id + ': ' + motivo, anulado_por: ses.nombre, anulado_en: ahora }));
+    if (ligados.length) avisos.push('El saldo a favor que se había usado vuelve a quedar disponible.');
+  }
   if (hoja === H.PEDIDOS) {
     const pagosVivos = tabla_(H.PAGOS).filas.filter(p => p.pedido_uniforme === d.id && esValido_(p));
     if (pagosVivos.length) avisos.push('Este pedido tiene ' + pagosVivos.length + ' pago(s) válidos (' + pagosVivos.map(p => p.id).join(', ') + '). Si hay que devolver la plata, anula también esos pagos.');
@@ -614,6 +670,113 @@ function guardarProfe_(d, ses) {
   bitacora_(ses, accion, H.PROFES, p.id, { antes: antes, despues: cambios, pagos_renombrados: renombrados });
   return { id: p.id, renombrados: renombrados };
 }
+
+// ---------- saldo a favor, devoluciones y descuentos
+
+/** Lo que debe o tiene a favor una persona en cada cosa: cargos, pedidos de uniforme y la tienda. */
+function saldosDe_(q) {
+  const mismo = f => q.estudiante_id ? f.estudiante_id === q.estudiante_id : (!f.estudiante_id && norm_(f.persona) === norm_(q.persona));
+  const pagos = tabla_(H.PAGOS).filas.filter(p => esValido_(p) && mismo(p));
+  const items = [];
+  if (q.estudiante_id) tabla_(H.CARGOS).filas.filter(c => esValido_(c) && mismo(c)).forEach(c => {
+    const pagado = sum_(pagos.filter(p => norm_(p.concepto) === norm_(c.concepto) && !p.pedido_uniforme), 'valor');
+    items.push({ origen: 'cargo', concepto: c.concepto, pedido: '', valor: num_(c.valor_total), pagado: pagado, saldo: num_(c.valor_total) - pagado });
+  });
+  tabla_(H.PEDIDOS).filas.filter(p => esValido_(p) && mismo(p)).forEach(pe => {
+    const pagado = sum_(pagos.filter(p => p.pedido_uniforme === pe.id), 'valor');
+    items.push({ origen: 'pedido', concepto: 'Uniforme', pedido: pe.id, valor: num_(pe.valor_acordado), pagado: pagado, saldo: num_(pe.valor_acordado) - pagado });
+  });
+  const fiado = sum_(tabla_(H.VENTAS).filas.filter(v => esValido_(v) && mismo(v) && esVentaACuenta_(v)), 'total');
+  const pagT = sum_(pagos.filter(p => norm_(p.concepto) === 'cuenta tienda'), 'valor');
+  if (fiado || pagT) items.push({ origen: 'tienda', concepto: 'Cuenta tienda', pedido: '', valor: fiado, pagado: pagT, saldo: fiado - pagT });
+  return { items: items, a_favor: items.filter(i => i.saldo < 0).reduce((s, i) => s - i.saldo, 0), debe: items.filter(i => i.saldo > 0).reduce((s, i) => s + i.saldo, 0) };
+}
+
+function saldosFavor_(d) {
+  const q = quien_(d);
+  const s = saldosDe_(q);
+  return { quien: q.estudiante || q.persona, items: s.items, a_favor: s.a_favor, debe: s.debe };
+}
+
+/** Pasa saldo a favor desde otros conceptos hacia "destino". Devuelve las filas negativas (no las inserta). */
+function consumirSaldo_(q, valor, destino, fecha, ses, nota, nInicio, ref) {
+  const fuentes = saldosDe_(q).items.filter(i => i.saldo < 0 && !(norm_(i.concepto) === norm_(destino.concepto) && String(i.pedido || '') === String(destino.pedido || '')))
+    .sort((a, b) => a.saldo - b.saldo);
+  const disponible = fuentes.reduce((s, i) => s - i.saldo, 0);
+  if (valor > disponible) throw err_((q.estudiante || q.persona) + ' solo tiene ' + pesos_(disponible) + ' a favor para usar aquí.', 'saldo');
+  let falta = valor, n = nInicio;
+  const filas = [];
+  fuentes.forEach(f => {
+    if (falta <= 0) return;
+    const usar = Math.min(falta, -f.saldo);
+    falta -= usar;
+    filas.push(auditar_({ id: 'P' + pad_(n++, 4), fecha: fecha, estudiante_id: q.estudiante_id, estudiante: q.estudiante, persona: q.persona,
+      concepto: f.concepto, valor: -usar, metodo: SALDO_FAVOR, recibido_en: '', pedido_uniforme: f.pedido || '', nota: nota, tipo: 'Saldo usado',
+      relacionado: ref || '' }, ses));
+  });
+  return filas;
+}
+
+/** Devolverle plata a alguien que tiene saldo a favor en un concepto. Sale de una cuenta. */
+function registrarDevolucion_(d, ses) {
+  const q = quien_(d);
+  const valor = monto_(d.valor);
+  const item = saldosDe_(q).items.find(i => norm_(i.concepto) === norm_(d.concepto) && String(i.pedido || '') === String(d.pedido_uniforme || ''));
+  const favor = item && item.saldo < 0 ? -item.saldo : 0;
+  if (!favor) throw err_('No tiene saldo a favor en ' + d.concepto + (d.pedido_uniforme ? ' ' + d.pedido_uniforme : '') + '.');
+  if (valor > favor) throw err_('Solo tiene ' + pesos_(favor) + ' a favor en ' + item.concepto + '.');
+  const metodo = enLista_(d.metodo, 'metodo_pago', 'método');
+  const p = auditar_({ id: siguienteId_(H.PAGOS, 'id', 'P', 4), fecha: fecha_(d.fecha), estudiante_id: q.estudiante_id, estudiante: q.estudiante,
+    persona: q.persona, concepto: item.concepto, valor: -valor, metodo: metodo, recibido_en: cuentaActiva_(d.pagado_desde, 'sale de'),
+    pedido_uniforme: item.pedido || '', nota: texto_(d.nota) || 'Devolución de saldo a favor', tipo: 'Devolución' }, ses);
+  insertar_(H.PAGOS, [p]);
+  bitacora_(ses, 'registrarDevolucion', H.PAGOS, p.id, p);
+  return { id: p.id, queda_a_favor: favor - valor };
+}
+
+/** Descuento en pesos con su motivo. Sin descuento devuelve campos vacíos. */
+function descuento_(d, base) {
+  if (d.descuento === undefined || d.descuento === null || d.descuento === '' || Number(d.descuento) === 0) return { descuento: '', motivo_descuento: '' };
+  const v = monto_(d.descuento);
+  if (base !== null && base !== undefined && v > base) throw err_('El descuento no puede ser mayor que el valor.');
+  return { descuento: v, motivo_descuento: requerido_(d.motivo_descuento, 'motivo del descuento') };
+}
+
+function listarDescuentos_() {
+  if (!hojaExiste_(H.DESCUENTOS)) return { descuentos: [] };
+  return { descuentos: tabla_(H.DESCUENTOS).filas.filter(f => f.id).map(f => ({ id: f.id, nombre: f.nombre, tipo: String(f.tipo), valor: num_(f.valor),
+    aplica_a: String(f.aplica_a || 'Todos'), activo: norm_(f.activo) !== 'no', nota: f.nota || '' })) };
+}
+
+function guardarDescuento_(d, ses) {
+  if (!hojaExiste_(H.DESCUENTOS)) throw err_('Falta la pestaña Descuentos: ejecuta "configurar" en Apps Script.');
+  const t = tabla_(H.DESCUENTOS);
+  const nombre = requerido_(d.nombre, 'nombre del descuento');
+  const tipo = d.tipo === '%' || d.tipo === '$' ? d.tipo : null;
+  if (!tipo) throw err_('El descuento debe ser en % o en $.');
+  const valor = monto_(d.valor);
+  if (tipo === '%' && valor > 100) throw err_('Un descuento no puede ser mayor al 100%.');
+  const aplica = texto_(d.aplica_a) || 'Todos';
+  if (norm_(aplica) !== 'todos') concepto_(aplica);
+  const otro = t.filas.find(f => f.id !== d.id && norm_(f.nombre) === norm_(nombre));
+  if (otro) throw err_('Ya existe un descuento con ese nombre.', 'duplicado');
+  if (!d.id) {
+    const x = { id: siguienteId_(H.DESCUENTOS, 'id', 'DS', 2), nombre: nombre, tipo: tipo, valor: valor, aplica_a: aplica, activo: 'Sí', nota: texto_(d.nota) };
+    insertar_(H.DESCUENTOS, [x]);
+    bitacora_(ses, 'crearDescuento', H.DESCUENTOS, x.id, x);
+    return { id: x.id };
+  }
+  const x = t.filas.find(f => f.id === d.id);
+  if (!x) throw err_('No encontré el descuento ' + d.id);
+  const cambios = { nombre: nombre, tipo: tipo, valor: valor, aplica_a: aplica, nota: texto_(d.nota) };
+  if (d.activo !== undefined) cambios.activo = d.activo ? 'Sí' : 'No';
+  const antes = { nombre: x.nombre, tipo: x.tipo, valor: x.valor, aplica_a: x.aplica_a, activo: x.activo };
+  actualizar_(t, x, cambios);
+  bitacora_(ses, 'editarDescuento', H.DESCUENTOS, x.id, { antes: antes, despues: cambios });
+  return { id: x.id };
+}
+
+function pesos_(v) { const n = Math.round(Number(v) || 0); return (n < 0 ? '-$' : '$') + String(Math.abs(n)).replace(/\B(?=(\d{3})+(?!\d))/g, '.'); }
 
 // ---------- productos e inventario
 
@@ -800,8 +963,8 @@ function reporteTienda_(d) {
   const dias = {};
   ventas.forEach(v => {
     const k = ymd_(v.fecha);
-    const x = dias[k] || (dias[k] = { fecha: k, vendido: 0, efectivo: 0, transferencia: 0, fiado: 0, consumo_interno: 0, ventas: {} });
-    const m = norm_(v.metodo).replace(' ', '_');
+    const x = dias[k] || (dias[k] = { fecha: k, vendido: 0, efectivo: 0, transferencia: 0, fiado: 0, consumo_interno: 0, saldo_a_favor: 0, ventas: {} });
+    const m = norm_(v.metodo).replace(/ /g, '_');
     if (m in x) x[m] += num_(v.total);
     if (esVentaCobrada_(v)) x.vendido += num_(v.total);
     x.ventas[v.venta] = true;
@@ -826,7 +989,7 @@ function cuentasTienda_(ventasValidas) {
   const c = {};
   const llave = f => f.estudiante_id || ('p:' + norm_(f.persona));
   const nombre = f => f.estudiante || f.persona;
-  ventasValidas.filter(v => norm_(v.metodo) === 'fiado').forEach(v => {
+  ventasValidas.filter(esVentaACuenta_).forEach(v => {
     const k = llave(v); const x = c[k] || (c[k] = { quien: nombre(v), estudiante_id: v.estudiante_id || '', fiado: 0, pagado: 0 });
     x.fiado += num_(v.total);
   });
@@ -944,7 +1107,9 @@ function fichaEstudiante_(d) {
       prendas: prendas.filter(l => l.pedido === p.id).map(limpio_) };
   });
   const tienda = cuentasTienda_(tabla_(H.VENTAS).filas.filter(esValido_)).find(x => x.estudiante_id === e.id) || null;
-  return { estudiante: limpio_(e), cargos: cargos, pedidos: pedidos, tienda: tienda, pagos: pagos.map(limpio_).reverse() };
+  const s = saldosDe_({ estudiante_id: e.id, estudiante: e.nombre, persona: '' });
+  return { estudiante: limpio_(e), cargos: cargos, pedidos: pedidos, tienda: tienda, pagos: pagos.map(limpio_).reverse(),
+    a_favor: s.items.filter(i => i.saldo < 0), total_a_favor: s.a_favor };
 }
 
 // ===================================================================== validaciones
@@ -1068,7 +1233,7 @@ function insertar_(nombre, objs) {
   if (!objs.length) return;
   const sh = hoja_(nombre);
   const headers = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0].map(h => String(h).trim());
-  const faltan = Object.keys(objs[0]).filter(k => headers.indexOf(k) < 0);
+  const faltan = Object.keys(objs[0]).filter(k => headers.indexOf(k) < 0 && objs.some(o => o[k] !== '' && o[k] !== undefined && o[k] !== null));
   if (faltan.length) throw err_('A la pestaña "' + nombre + '" le faltan columnas: ' + faltan.join(', ') + '. Ejecuta "Configurar" desde el menú Vox.');
   const rows = objs.map(o => headers.map(h => o[h] === undefined || o[h] === null ? '' : o[h]));
   sh.getRange(sh.getLastRow() + 1, 1, rows.length, headers.length).setValues(rows);
@@ -1121,7 +1286,9 @@ function sum_(filas, campo) { return filas.reduce((s, f) => s + num_(f[campo]), 
 function pad_(n, w) { return String(n).padStart(w, '0'); }
 function numeroId_(id) { return Number(String(id).replace(/^\D+/, '')); }
 function ymd_(d) { return d instanceof Date ? Utilities.formatDate(d, TZ, 'yyyy-MM-dd') : String(d || ''); }
-function esVentaCobrada_(v) { const m = norm_(v.metodo); return m !== 'fiado' && m !== 'consumo interno'; }
+function esVentaCobrada_(v) { const m = norm_(v.metodo); return m !== 'fiado' && m !== 'consumo interno' && m !== 'saldo a favor'; }
+function esVentaACuenta_(v) { const m = norm_(v.metodo); return m === 'fiado' || m === 'saldo a favor'; }
+function esSaldo_(m) { return norm_(m) === 'saldo a favor'; }
 function agrupar_(filas, campo, valor) { const o = {}; filas.forEach(f => { const k = f[campo] || '(sin dato)'; o[k] = (o[k] || 0) + num_(f[valor]); }); return o; }
 function contar_(filas, campo) { const o = {}; filas.forEach(f => { const k = f[campo] || '(sin dato)'; o[k] = (o[k] || 0) + 1; }); return o; }
 function contarGrupos_(filas, campo) { const o = {}; filas.forEach(f => o[f[campo]] = true); return Object.keys(o).length; }
@@ -1166,6 +1333,7 @@ function configurar() {
     const cols = HOJAS_NUEVAS[nombre];
     sh.getRange(1, 1, 1, cols.length).setValues([cols]).setFontWeight('bold').setFontColor('#FFFFFF').setBackground('#1F1229');
     sh.setFrozenRows(1);
+    if (SEMILLAS[nombre]) sh.getRange(2, 1, SEMILLAS[nombre].length, cols.length).setValues(SEMILLAS[nombre]);
     if (nombre === H.PLANES) {
       // Se siembran los planes que ya tienen los estudiantes; el valor mensual queda para llenarlo.
       const vistos = {};
@@ -1235,4 +1403,80 @@ function cerrarSesiones() {
   const props = PropertiesService.getScriptProperties();
   props.setProperty('SESIONES_V', String(Number(props.getProperty('SESIONES_V') || '1') + 1));
   try { SpreadsheetApp.getUi().alert('Listo: todos tendrán que volver a entrar.'); } catch (x) { /* sin interfaz */ }
+}
+
+
+// ===================================================================== correcciones puntuales (se ejecutan una vez desde el editor)
+
+/**
+ * Ajustes confirmados con recepción el 22/10/2026. Si ya se aplicaron, no hace nada.
+ * Ejecutar desde el editor de Apps Script → función correccionesRevision22oct.
+ */
+function correccionesRevision22oct() {
+  const ses = { nombre: 'Revisión recepción 22/10' };
+  if (tabla_(H.BITACORA).filas.some(x => x.accion === 'correcciones_22oct')) { console.log('Ya se habían aplicado.'); return 'Ya se habían aplicado.'; }
+  const res = [];
+  const est = tabla_(H.ESTUDIANTES).filas;
+  const idDe = nombre => (est.find(e => norm_(e.nombre) === norm_(nombre)) || {}).id;
+  const F = (y, m, d) => new Date(y, m - 1, d, 12);
+  const tp = tabla_(H.PAGOS);
+  let n = numeroId_(siguienteId_(H.PAGOS, 'id', 'P', 4));
+  const nuevos = [];
+  const pago = (o) => auditar_(Object.assign({ id: 'P' + pad_(n++, 4), persona: '', pedido_uniforme: '', metodo: 'Otro', recibido_en: 'Sin dato', tipo: '' }, o), ses);
+
+  // 1. Melanie Zuluaga: ya pagó los $150.000 del vestuario.
+  const mel = idDe('Melanie Zuluaga');
+  const pagMel = sum_(tp.filas.filter(p => esValido_(p) && p.estudiante_id === mel && norm_(p.concepto) === 'vestuario clausura'), 'valor');
+  if (mel && pagMel < 150000) {
+    nuevos.push(pago({ fecha: F(2026, 10, 22), estudiante_id: mel, estudiante: 'Melanie Zuluaga', concepto: 'Vestuario clausura', valor: 150000 - pagMel,
+      nota: 'Completó el vestuario ($150.000 en total), confirmado por recepción el 22/10. Fecha y método del pago sin dato' }));
+    res.push('Melanie Zuluaga: pago de ' + pesos_(150000 - pagMel) + ' (queda al día)');
+  } else res.push('Melanie Zuluaga: ya estaba al día');
+
+  // 2. Isabela Ruiz: el abono de $50.300 se deja en $50.250 para cerrar en $300.000.
+  const isa = idDe('Isabela Ruiz');
+  const p503 = tp.filas.find(p => esValido_(p) && p.estudiante_id === isa && num_(p.valor) === 50300);
+  if (p503) {
+    actualizar_(tp, p503, { valor: 50250, nota: (p503.nota ? p503.nota + '. ' : '') + 'Ajustado de $50.300 a $50.250 en la revisión del 22/10 para cerrar en $300.000' });
+    res.push('Isabela Ruiz: abono ' + p503.id + ' ajustado a $50.250 (queda al día)');
+  } else res.push('Isabela Ruiz: no encontré el abono de $50.300');
+
+  // 7. Emiliana Montoya: se explica el valor pagado (5% por matrícula); conserva su saldo a favor.
+  const tped = tabla_(H.PEDIDOS);
+  const ped = tped.filas.find(p => p.id === 'U064' && norm_(p.estudiante).indexOf('emiliana montoya') >= 0);
+  if (ped) {
+    actualizar_(tped, ped, { nota: 'Pagó $180.500 = conjunto $190.000 con 5% de descuento por comprarlo el día de la matrícula. Cambió la sudadera por camiseta: blusa $80.000 + camiseta $85.000 = $165.000. Le quedan $15.500 a favor' });
+    res.push('Emiliana Montoya: nota del pedido U064 actualizada');
+  }
+
+  // 8. La Emma con $100 a favor en la tienda es Emma Rodríguez.
+  const emma = idDe('Emma Rodriguez');
+  const pe = tp.filas.find(p => esValido_(p) && !p.estudiante_id && norm_(p.persona) === 'emma' && norm_(p.concepto) === 'cuenta tienda');
+  if (pe && emma) {
+    actualizar_(tp, pe, { estudiante_id: emma, estudiante: 'Emma Rodriguez', persona: '' });
+    res.push('Emma: el saldo de $100 de la tienda quedó a nombre de Emma Rodriguez');
+  }
+
+  // 9. María Antonia Cortés: tiene además $300 a favor (17/10).
+  const mac = idDe('Maria Antonia Cortes');
+  const ya300 = tp.filas.some(p => esValido_(p) && p.estudiante_id === mac && norm_(p.concepto) === 'cuenta tienda' && num_(p.valor) === 300);
+  if (mac && !ya300) {
+    nuevos.push(pago({ fecha: F(2026, 10, 17), estudiante_id: mac, estudiante: 'Maria Antonia Cortes', concepto: 'Cuenta tienda', valor: 300,
+      nota: 'Saldo a favor de la tienda vieja (17/10), confirmado por recepción el 22/10' }));
+    res.push('María Antonia Cortés: +$300 a favor en la tienda');
+  }
+  if (nuevos.length) insertar_(H.PAGOS, nuevos);
+
+  // 10. Los $100.000 de Antonia Rueda ya salieron de la cuenta de Majo.
+  const yaT = tabla_(H.TRASLADOS).filas.some(t => esValido_(t) && norm_(t.de) === 'cuenta majo' && num_(t.valor) === 100000 && ymd_(t.fecha) >= '2026-10-20');
+  if (!yaT) {
+    insertar_(H.TRASLADOS, [auditar_({ id: siguienteId_(H.TRASLADOS, 'id', 'X', 3), fecha: F(2026, 10, 22), de: 'Cuenta Majo', a: 'Caja', valor: 100000,
+      nota: 'Retiro de los $100.000 de Antonia Rueda, confirmado por recepción el 22/10 (fecha aproximada)' }, ses)]);
+    res.push('Traslado de $100.000 de la cuenta de Majo a Caja');
+  } else res.push('El traslado de los $100.000 ya estaba registrado');
+
+  bitacora_(ses, 'correcciones_22oct', H.PAGOS, '', res);
+  SpreadsheetApp.flush();
+  console.log(res.join('\n'));
+  return res.join('\n');
 }

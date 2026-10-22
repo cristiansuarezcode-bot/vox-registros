@@ -2,7 +2,7 @@
 import { useMemo, useState } from 'react';
 import type { Quien } from '@/lib/tipos';
 import { fechaCorta, hoy, pesos } from '@/lib/util';
-import { BuscarQuien, Campo, Cargando, ErrorCaja, Monto, Pantalla, Segmentado, Selector, cuentaPorMetodo, cuentasBanco, datosQuien, useAccion, useApp, useDatos } from './ui';
+import { BuscarQuien, Campo, Cargando, ErrorCaja, Monto, Pantalla, Segmentado, Selector, SelectorDescuento, SIN_DESCUENTO, cuentaPorMetodo, cuentasBanco, datosDescuento, datosQuien, useAccion, useApp, useDatos, useSaldoFavor, type ValorDescuento } from './ui';
 import { ResumenQuien } from './registrar';
 
 export function Uniformes() {
@@ -39,8 +39,12 @@ function NuevoPedido() {
   const [items, setItems] = useState<string[]>([]); // ids del catálogo escogidos (para sugerir el valor)
   const [clave, setClave] = useState(0);
 
+  const [desc, setDesc] = useState<ValorDescuento>(SIN_DESCUENTO);
+  const favor = useSaldoFavor(quien);
+  const conSaldo = metodo === 'Saldo a favor';
   const sugerido = useMemo(() => items.reduce((s, id) => s + (cat.prendas.find(p => p.id === id)?.precio || 0), 0), [items, cat.prendas]);
-  const valorFinal = valorTocado ? valor : sugerido;
+  const lista = valorTocado ? valor : sugerido;
+  const valorFinal = lista - desc.descuento;
 
   const agregar = (id: string) => {
     const p = cat.prendas.find(x => x.id === id);
@@ -52,12 +56,13 @@ function NuevoPedido() {
   const quitar = (i: number) => setLineas(ls => ls.filter((_, j) => j !== i));
 
   const guardar = async () => {
-    const datos: Record<string, unknown> = { fecha, ...datosQuien(quien), valor_acordado: valorFinal, prendas: lineas, nota };
-    if (abono > 0) datos.pago = { valor: abono, metodo, recibido_en: cuenta };
+    const datos: Record<string, unknown> = { fecha, ...datosQuien(quien), valor_lista: lista, ...datosDescuento(desc), prendas: lineas, nota };
+    if (abono > 0) datos.pago = { valor: abono, metodo, recibido_en: conSaldo ? '' : cuenta };
     const r = await correr<{ id: string }>('crearPedido', datos);
     if (r) {
       aviso(`Pedido ${r.id} guardado para ${quien?.nombre}${abono ? ` con abono de ${pesos(abono)}` : ''}`);
-      setQuien(null); setLineas([]); setItems([]); setValor(0); setValorTocado(false); setAbono(0); setNota(''); setClave(k => k + 1);
+      setQuien(null); setLineas([]); setItems([]); setValor(0); setValorTocado(false); setAbono(0); setNota(''); setDesc(SIN_DESCUENTO); setClave(k => k + 1);
+      if (conSaldo) setMetodo('Transferencia');
     }
   };
 
@@ -87,9 +92,11 @@ function NuevoPedido() {
         </div>
       )}
       <div className="rejilla" style={{ marginTop: 12 }}>
-        <Campo label="Valor acordado" ayuda={sugerido ? `Según el catálogo: ${pesos(sugerido)}` : 'Escríbelo si no sale del catálogo'}>
-          <Monto valor={valorFinal} onChange={v => { setValor(v); setValorTocado(true); }} />
+        <Campo label="Precio" ayuda={sugerido ? `Según el catálogo: ${pesos(sugerido)}` : 'Escríbelo si no sale del catálogo'}>
+          <Monto valor={lista} onChange={v => { setValor(v); setValorTocado(true); }} />
         </Campo>
+        {lista > 0 && <SelectorDescuento concepto="Uniforme" base={lista} valor={desc} onChange={setDesc} />}
+        {desc.descuento > 0 && <div className="campo"><label>Total a pagar</label><div className="elegido" style={{ background: '#fff' }}><b>{pesos(valorFinal)}</b></div></div>}
         <Campo label="Fecha"><input type="date" value={fecha} max={hoy()} onChange={e => setFecha(e.target.value)} /></Campo>
         <Campo label="Nota (opcional)"><input value={nota} onChange={e => setNota(e.target.value)} placeholder="Ej: la quiere para el sábado" /></Campo>
       </div>
@@ -98,12 +105,14 @@ function NuevoPedido() {
       <div className="rejilla" style={{ marginTop: 8 }}>
         <Campo label="Abono"><Monto valor={abono} onChange={setAbono} placeholder="$ 0 (no pagó)" /></Campo>
         {abono > 0 && <>
-          <Campo label="Método" ancho><Segmentado opciones={metodos} valor={metodo} onChange={m => { setMetodo(m); setCuenta(cuentaPorMetodo(m, cat)); }} /></Campo>
-          <Campo label="¿A dónde entró?" ancho><Segmentado opciones={cuentasBanco(cat)} valor={cuenta} onChange={setCuenta} /></Campo>
+          <Campo label="Método" ancho><Segmentado opciones={favor.a_favor > 0 ? [...metodos, 'Saldo a favor'] : metodos} valor={metodo} onChange={m => { setMetodo(m); if (m !== 'Saldo a favor') setCuenta(cuentaPorMetodo(m, cat)); }} /></Campo>
+          {conSaldo
+            ? <p className={'aviso ' + (abono > favor.a_favor ? 'error' : 'ok')} style={{ gridColumn: '1 / -1', margin: 0 }}>Tiene <b>{pesos(favor.a_favor)}</b> a favor{abono > favor.a_favor ? ': no alcanza para este abono.' : '. Se usa para este abono sin que entre plata a ninguna cuenta.'}</p>
+            : <Campo label="¿A dónde entró?" ancho><Segmentado opciones={cuentasBanco(cat)} valor={cuenta} onChange={setCuenta} /></Campo>}
         </>}
       </div>
       <div className="acciones">
-        <button className="btn" disabled={!quien || !lineas.length || ocupado || abono > valorFinal} onClick={guardar}>
+        <button className="btn" disabled={!quien || !lineas.length || ocupado || abono > valorFinal || (desc.descuento > 0 && !desc.motivo.trim()) || (conSaldo && abono > favor.a_favor)} onClick={guardar}>
           {ocupado ? 'Guardando…' : 'Guardar pedido'}
         </button>
         {abono > valorFinal && <span className="aviso error" style={{ margin: 0 }}>El abono es mayor que el valor acordado.</span>}

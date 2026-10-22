@@ -518,3 +518,79 @@ function EliminarProfe({ p, onCerrar, onListo }: { p: ProfeFila; onCerrar: () =>
     </Modal>
   );
 }
+
+// ---------- descuentos
+type DescFila = { id: string; nombre: string; tipo: string; valor: number; aplica_a: string; activo: boolean; nota: string };
+
+export function Descuentos() {
+  const { recargarCat } = useApp();
+  const { d, error, cargando, recargar } = useDatos<{ descuentos: DescFila[] }>('listarDescuentos', {}, []);
+  const [editar, setEditar] = useState<DescFila | 'nuevo' | null>(null);
+  const { ocupado, correr } = useAccion();
+  const listo = async () => { setEditar(null); recargar(); await recargarCat(); };
+  const alternar = async (x: DescFila) => {
+    if (await correr('guardarDescuento', { ...x, activo: !x.activo }, x.activo ? `"${x.nombre}" desactivado` : `"${x.nombre}" activado`)) listo();
+  };
+  const filas = d?.descuentos || [];
+  return (
+    <Pantalla titulo="Descuentos" sub="Los que aparecen para escoger al registrar un pago, un cargo o un uniforme. Siempre se puede poner uno especial escribiendo el motivo">
+      <div className="tarjeta">
+        <div className="acciones" style={{ marginTop: 0 }}><button className="btn" onClick={() => setEditar('nuevo')}>+ Nuevo descuento</button></div>
+      </div>
+      {error && <ErrorCaja msg={error} reintentar={recargar} />}
+      {cargando && !d && <Cargando texto="Cargando descuentos…" />}
+      {d && <div className="tarjeta">
+        {!filas.length ? <p className="vacio">No hay descuentos guardados.</p> : (
+          <div className="tabla-envoltura"><table className="tabla tarjetas">
+            <thead><tr><th>Descuento</th><th className="num">Valor</th><th>Aplica a</th><th></th></tr></thead>
+            <tbody>{filas.map(x => (
+              <tr key={x.id} className={x.activo ? '' : 'inactivo'}>
+                <td><b>{x.nombre}</b>{!x.activo && <> <span className="chip inactivo">Inactivo</span></>}{x.nota && <><br /><small className="suave">{x.nota}</small></>}</td>
+                <td className="num" data-label="Valor">{x.tipo === '%' ? `${x.valor}%` : pesos(x.valor)}</td>
+                <td data-label="Aplica a">{x.aplica_a === 'Todos' ? 'Cualquier concepto' : x.aplica_a}</td>
+                <td className="acciones-fila" style={{ whiteSpace: 'nowrap' }}>
+                  <button className="btn secundario chico" onClick={() => setEditar(x)}>Editar</button>{' '}
+                  <button className={'btn chico' + (x.activo ? ' secundario' : '')} disabled={ocupado} onClick={() => alternar(x)}>{x.activo ? 'Desactivar' : 'Activar'}</button>
+                </td>
+              </tr>))}
+            </tbody>
+          </table></div>
+        )}
+      </div>}
+      {editar && <EditarDescuento x={editar === 'nuevo' ? null : editar} onCerrar={() => setEditar(null)} onListo={listo} />}
+    </Pantalla>
+  );
+}
+
+function EditarDescuento({ x, onCerrar, onListo }: { x: DescFila | null; onCerrar: () => void; onListo: () => void }) {
+  const { cat } = useApp();
+  const [nombre, setNombre] = useState(x?.nombre || '');
+  const [tipo, setTipo] = useState<'%' | '$'>(x?.tipo === '$' ? '$' : '%');
+  const [valor, setValor] = useState(x?.valor || 0);
+  const [aplica, setAplica] = useState(x?.aplica_a || 'Todos');
+  const [nota, setNota] = useState(x?.nota || '');
+  const { ocupado, correr } = useAccion();
+  const opciones = ['Todos', ...cat.conceptos.map(c => c.nombre)];
+  const malo = !nombre.trim() || valor <= 0 || (tipo === '%' && valor > 100);
+  const guardar = async () => {
+    const datos = { id: x?.id, nombre, tipo, valor, aplica_a: aplica, nota };
+    if (await correr('guardarDescuento', datos, x ? 'Descuento actualizado' : `"${nombre.trim()}" agregado`)) onListo();
+  };
+  return (
+    <Modal titulo={x ? 'Editar descuento' : 'Nuevo descuento'} onCerrar={onCerrar}>
+      <div className="rejilla">
+        <Campo label="Nombre" ancho><input autoFocus value={nombre} onChange={e => setNombre(e.target.value)} placeholder="Ej: Hermanos" /></Campo>
+        <Campo label="Tipo"><Segmentado opciones={['%', '$'] as const} valor={tipo} onChange={setTipo} /></Campo>
+        <Campo label={tipo === '%' ? 'Porcentaje' : 'Valor'}>
+          {tipo === '%'
+            ? <input type="number" inputMode="decimal" min={1} max={100} value={valor || ''} onChange={e => setValor(Number(e.target.value))} placeholder="Ej: 5" />
+            : <Monto valor={valor} onChange={setValor} />}
+        </Campo>
+        <Campo label="Aplica a" ayuda="En qué concepto aparece para escoger"><Selector valor={aplica} onChange={setAplica} opciones={opciones} /></Campo>
+        <Campo label="Nota (opcional)" ancho><input value={nota} onChange={e => setNota(e.target.value)} placeholder="Ej: solo si compra el mismo día" /></Campo>
+      </div>
+      {tipo === '%' && valor > 100 && <p className="aviso error">No puede ser mayor al 100%.</p>}
+      <div className="acciones"><button className="btn" disabled={ocupado || malo} onClick={guardar}>{ocupado ? 'Guardando…' : 'Guardar'}</button><button className="btn secundario" onClick={onCerrar}>Cancelar</button></div>
+    </Modal>
+  );
+}

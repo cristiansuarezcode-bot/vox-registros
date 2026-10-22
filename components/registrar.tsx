@@ -3,7 +3,9 @@ import { useEffect, useMemo, useState } from 'react';
 import type { Quien } from '@/lib/tipos';
 import { api } from '@/lib/api';
 import { hoy, mesActual, norm, pesos } from '@/lib/util';
-import { BuscarQuien, Campo, Estado, Monto, Pantalla, Segmentado, Selector, cuentaPorMetodo, cuentasBanco, datosQuien, useAccion, useApp } from './ui';
+import { BuscarQuien, Campo, Estado, Monto, Pantalla, Segmentado, Selector, SelectorDescuento, SIN_DESCUENTO, cuentaPorMetodo, cuentasBanco, datosDescuento, datosQuien, useAccion, useApp, useSaldoFavor, type ValorDescuento } from './ui';
+
+export const SALDO = 'Saldo a favor';
 
 type Ficha = {
   cargos: { concepto: string; saldo: number; cantidad: number }[];
@@ -40,19 +42,25 @@ export function ResumenQuien({ q }: { q: Quien }) {
 
 // ------------------------------------------------------------------ pago
 export function RegistrarPago() {
-  const { cat, aviso } = useApp();
+  const { cat, aviso, params } = useApp();
   const { ocupado, correr } = useAccion();
-  const metodos = cat.listas.metodo_pago.map(String);
+  const metodosBase = cat.listas.metodo_pago.map(String);
+  const inicial: Quien = params.estudiante_id ? (e => (e ? { estudiante_id: e.id, nombre: e.nombre } : null))(cat.estudiantes.find(x => x.id === params.estudiante_id))
+    : params.persona ? { persona: params.persona, nombre: params.persona } : null;
   const [fecha, setFecha] = useState(hoy());
-  const [quien, setQuien] = useState<Quien>(null);
+  const [quien, setQuien] = useState<Quien>(inicial);
   const [concepto, setConcepto] = useState('');
   const [valor, setValor] = useState(0);
-  const [metodo, setMetodo] = useState(metodos[0] || 'Efectivo');
+  const [metodo, setMetodo] = useState(params.metodo === 'saldo' ? SALDO : metodosBase[0] || 'Efectivo');
   const [recibido, setRecibido] = useState('Caja');
   const [pedido, setPedido] = useState('');
   const [nota, setNota] = useState('');
+  const [desc, setDesc] = useState<ValorDescuento>(SIN_DESCUENTO);
   const [pedidos, setPedidos] = useState<{ pedido: string; saldo: number; estudiante_id: string; quien: string; prendas_pendientes: string[] }[]>([]);
   const [clave, setClave] = useState(0); // para reiniciar el buscador
+  const favor = useSaldoFavor(quien);
+  const conSaldo = metodo === SALDO;
+  const metodos = favor.a_favor > 0 || conSaldo ? [...metodosBase, SALDO] : metodosBase;
 
   const esUniforme = norm(concepto) === 'uniforme';
   useEffect(() => {
@@ -70,24 +78,31 @@ export function RegistrarPago() {
     if (norm(c) === 'mensualidad') return planDe(q)?.valor_mensual || 0;
     return cat.conceptos.find(x => x.nombre === c)?.valor_base || 0;
   };
+  const base = concepto ? valorSugerido(concepto, quien) : 0;
   const elegirConcepto = (c: string) => {
     setConcepto(c);
+    setDesc(SIN_DESCUENTO);
     const v = valorSugerido(c, quien);
     if (v) setValor(v);
     setPedido('');
   };
   const elegirQuien = (q: Quien) => {
     setQuien(q);
+    setDesc(SIN_DESCUENTO);
     if (concepto) { const v = valorSugerido(concepto, q); if (v) setValor(v); }
   };
-  const elegirMetodo = (m: string) => { setMetodo(m); setRecibido(cuentaPorMetodo(m, cat)); };
+  const elegirMetodo = (m: string) => { setMetodo(m); if (m !== SALDO) setRecibido(cuentaPorMetodo(m, cat)); };
+  const elegirDescuento = (d: ValorDescuento) => { setDesc(d); if (base) setValor(base - d.descuento); };
+  // Lo que puede usar: su saldo a favor sin contar el del mismo concepto que va a pagar.
+  const disponible = favor.items.filter(i => i.saldo < 0 && !(norm(i.concepto) === norm(concepto) && (i.pedido || '') === (pedido || ''))).reduce((s, i) => s - i.saldo, 0);
 
-  const listo = quien && concepto && valor > 0 && metodo && recibido && (!esUniforme || pedido);
+  const listo = quien && concepto && valor > 0 && metodo && (conSaldo ? valor <= disponible : recibido) && (!esUniforme || pedido) && (!desc.descuento || desc.motivo.trim());
   const guardar = async () => {
-    const r = await correr<{ id: string }>('registrarPago', { fecha, ...datosQuien(quien), concepto, valor, metodo, recibido_en: recibido, pedido_uniforme: pedido, nota });
+    const r = await correr<{ id: string }>('registrarPago', { fecha, ...datosQuien(quien), concepto, valor, metodo, recibido_en: conSaldo ? '' : recibido, pedido_uniforme: pedido, nota, ...datosDescuento(desc) });
     if (r) {
-      aviso(`Pago guardado (${r.id}): ${quien?.nombre} · ${concepto} · ${pesos(valor)}`);
-      setQuien(null); setValor(0); setNota(''); setPedido(''); setClave(k => k + 1);
+      aviso(`Pago guardado (${r.id}): ${quien?.nombre} · ${concepto} · ${pesos(valor)}${conSaldo ? ' con saldo a favor' : ''}`);
+      setQuien(null); setValor(0); setNota(''); setPedido(''); setDesc(SIN_DESCUENTO); setClave(k => k + 1);
+      if (conSaldo) setMetodo(metodosBase[0] || 'Efectivo');
       const k = cat.conceptos.find(x => x.nombre === concepto);
       if (k?.valor_base && norm(concepto) !== 'mensualidad') setValor(k.valor_base);
     }
@@ -100,6 +115,7 @@ export function RegistrarPago() {
           <div style={{ gridColumn: '1 / -1' }} key={clave}>
             <BuscarQuien valor={quien} onChange={elegirQuien} />
             <ResumenQuien q={quien} />
+            {favor.a_favor > 0 && <p className="aviso ok" style={{ marginBottom: 0 }}>Tiene <b>{pesos(favor.a_favor)}</b> a favor. Puede usarlo para este pago escogiendo “Saldo a favor” como método.</p>}
           </div>
           <Campo label="Concepto">
             <Selector valor={concepto} onChange={elegirConcepto} vacio="Escoge…" opciones={cat.conceptos.map(c => c.nombre)} />
@@ -111,13 +127,22 @@ export function RegistrarPago() {
             </Campo>
           )}
           <Campo label="Valor" ayuda={norm(concepto) === 'mensualidad' ? (plan ? (plan.valor_mensual ? `${plan.nombre}: ${pesos(plan.valor_mensual)} al mes` : `${plan.nombre} no tiene valor mensual. Ponlo en Estudiantes → Planes.`) : quien?.estudiante_id ? 'Este estudiante no tiene plan asignado.' : undefined) : undefined}>
-            <Monto valor={valor} onChange={setValor} />
+            <Monto valor={valor} onChange={v => { setValor(v); }} />
           </Campo>
           <Campo label="Fecha"><input type="date" value={fecha} max={hoy()} onChange={e => setFecha(e.target.value)} /></Campo>
+          {base > 0 && <SelectorDescuento key={concepto + (quien?.estudiante_id || '')} concepto={concepto} base={base} valor={desc} onChange={elegirDescuento} />}
           <Campo label="Método de pago" ancho><Segmentado opciones={metodos} valor={metodo} onChange={elegirMetodo} /></Campo>
-          <Campo label="¿A dónde entró la plata?" ancho ayuda={metodo !== 'Efectivo' ? `Sugerida por la fecha: ${cat.cuenta_sugerida}. Cámbiala si la familia transfirió a otra.` : undefined}>
-            <Segmentado opciones={cuentasBanco(cat)} valor={recibido} onChange={setRecibido} />
-          </Campo>
+          {conSaldo ? (
+            <div className="campo" style={{ gridColumn: '1 / -1' }}>
+              <p className={'aviso ' + (valor > disponible ? 'error' : 'ok')} style={{ margin: 0 }}>
+                {favor.cargando ? 'Revisando su saldo a favor…' : <>Puede usar <b>{pesos(disponible)}</b> de su saldo a favor. No entra plata a ninguna cuenta: se pasa de un concepto a otro.</>}
+              </p>
+            </div>
+          ) : (
+            <Campo label="¿A dónde entró la plata?" ancho ayuda={metodo !== 'Efectivo' ? `Sugerida por la fecha: ${cat.cuenta_sugerida}. Cámbiala si la familia transfirió a otra.` : undefined}>
+              <Segmentado opciones={cuentasBanco(cat)} valor={recibido} onChange={setRecibido} />
+            </Campo>
+          )}
           <Campo label="Nota (opcional)" ancho><input value={nota} onChange={e => setNota(e.target.value)} placeholder="Ej: abono, pagó la mamá…" /></Campo>
         </div>
         <div className="acciones">
