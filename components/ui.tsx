@@ -1,7 +1,7 @@
 'use client';
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { Catalogos, Quien } from '@/lib/tipos';
-import { api, ErrorApi } from '@/lib/api';
+import { api, ErrorApi, escucharCarga } from '@/lib/api';
 import { norm, pesos, aNumero } from '@/lib/util';
 
 // ------------------------------------------------------------------ contexto de la app
@@ -118,7 +118,21 @@ export function Estado({ saldo }: { saldo: number }) {
 }
 
 export function Cargando({ texto }: { texto?: string }) {
-  return <div className="cargando">{texto || 'Cargando…'}</div>;
+  return <div className="cargando" role="status"><span className="girando" aria-hidden />{texto || 'Cargando…'}</div>;
+}
+
+/** Barra fina arriba de la pantalla mientras haya consultas en camino (aparece si tardan más de 0,15 s). */
+export function BarraCarga() {
+  const [visible, setVisible] = useState(false);
+  useEffect(() => {
+    let t: ReturnType<typeof setTimeout> | null = null;
+    const quitar = escucharCarga(n => {
+      if (n > 0) { if (!t) t = setTimeout(() => setVisible(true), 150); }
+      else { if (t) clearTimeout(t); t = null; setVisible(false); }
+    });
+    return () => { quitar(); if (t) clearTimeout(t); };
+  }, []);
+  return visible ? <div className="barra-carga" role="progressbar" aria-label="Cargando" /> : null;
 }
 
 export function ErrorCaja({ msg, reintentar }: { msg: string; reintentar?: () => void }) {

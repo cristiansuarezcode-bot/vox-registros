@@ -2,13 +2,13 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { api, cuandoSeCierreSesion, entrar, ErrorApi, leerSesion, salir, type Sesion } from '@/lib/api';
 import type { Catalogos } from '@/lib/tipos';
-import { AppCtx, Cargando, ErrorCaja } from '@/components/ui';
+import { AppCtx, BarraCarga, ErrorCaja } from '@/components/ui';
+import { Cuenta, Estudiantes, Inventario } from '@/components/admin';
 import { Gasto, PagoProfe, RegistrarPago, Traslado } from '@/components/registrar';
 import { Tienda } from '@/components/tienda';
 import { Uniformes } from '@/components/uniformes';
 import { Cuentas, Ficha, Historial, Hoy, ReporteProfes, ReporteTienda, Saldos } from '@/components/consultas';
 
-const base = process.env.NEXT_PUBLIC_BASE_PATH || '';
 
 const VISTAS: Record<string, () => ReactNode> = {
   pago: () => <RegistrarPago />,
@@ -24,6 +24,9 @@ const VISTAS: Record<string, () => ReactNode> = {
   cuentas: () => <Cuentas />,
   reporteProfes: () => <ReporteProfes />,
   historial: () => <Historial />,
+  estudiantes: () => <Estudiantes />,
+  inventario: () => <Inventario />,
+  cuenta: () => <Cuenta />,
 };
 
 function leerHash() {
@@ -61,16 +64,18 @@ function Login({ onEntrar }: { onEntrar: (s: Sesion) => void }) {
   };
   return (
     <div className="login">
+      <BarraCarga />
       <form className="caja" onSubmit={enviar}>
-        <img src={base + '/logo.png'} alt="" />
-        <h1>Registros Vox</h1>
-        <p>Vox Corpus Danza</p>
+        <span className="logo-vox" role="img" aria-label="Vox Corpus Danza" />
+        <h1>Registros</h1>
+        <p>Acceso para el equipo de Vox Corpus Danza</p>
         <div className="campo" style={{ marginBottom: 10 }}><label htmlFor="u">Usuario</label>
           <input id="u" autoComplete="username" autoCapitalize="none" value={usuario} onChange={e => setUsuario(e.target.value)} /></div>
         <div className="campo"><label htmlFor="c">Clave</label>
           <input id="c" type="password" autoComplete="current-password" value={clave} onChange={e => setClave(e.target.value)} /></div>
         {error && <div className="aviso error">{error}</div>}
-        <button className="btn" disabled={!usuario || !clave || ocupado}>{ocupado ? 'Entrando…' : 'Entrar'}</button>
+        <button className="btn" disabled={!usuario || !clave || ocupado}>{ocupado ? <><span className="girando chico" style={{ borderColor: 'rgba(255,255,255,.4)', borderTopColor: '#fff' }} />Entrando…</> : 'Entrar'}</button>
+        <p style={{ marginTop: 16, marginBottom: 0, fontSize: 13 }}>¿Olvidaste tu clave? Pídele a Cristian o a Liz que te pongan una nueva.</p>
       </form>
     </div>
   );
@@ -107,20 +112,21 @@ function App({ sesion, onSalir }: { sesion: Sesion; onSalir: () => void }) {
 
   return (
     <>
+      <BarraCarga />
       <header className="encabezado">
         <div className="encabezado-in">
-          <button className="marca" onClick={() => ir('inicio')}>
-            <img src={base + '/logo.png'} alt="" />
-            <span>Registros Vox<small>Vox Corpus Danza</small></span>
+          <button className="marca" onClick={() => ir('inicio')} aria-label="Inicio">
+            <span className="logo-vox" aria-hidden />
+            <span className="rotulo">Registros</span>
           </button>
           <span className="espacio" />
-          <span className="usuario">{sesion.nombre}</span>
+          <button className="usuario" onClick={() => ir('cuenta')} title="Mi cuenta">{sesion.nombre}</button>
           <button className="salir" onClick={onSalir}>Salir</button>
         </div>
       </header>
       <main className="contenedor">
         {errorCat && <ErrorCaja msg={errorCat} reintentar={recargarCat} />}
-        {!cat && !errorCat && <Cargando texto="Cargando listas…" />}
+        {!cat && !errorCat && <div className="portada"><div><span className="girando" /><span>Cargando estudiantes, productos y cuentas…</span></div></div>}
         {cat && (
           <AppCtx.Provider value={{ cat, recargarCat, aviso, ir, params: ruta.params }}>
             {VISTAS[ruta.vista] ? <div key={ruta.vista}>{VISTAS[ruta.vista]()}</div> : <Inicio nombre={sesion.nombre} ir={ir} />}
@@ -139,6 +145,11 @@ const REGISTRAR = [
   { v: 'profe', i: '🧑‍🏫', t: 'Pago a profe', s: 'Clases del periodo' },
   { v: 'gasto', i: '🧾', t: 'Gasto', s: 'Compras y pagos' },
   { v: 'traslado', i: '🔁', t: 'Traslado', s: 'Entre cuentas o a caja' },
+];
+const ADMINISTRAR = [
+  { v: 'estudiantes', i: '🎓', t: 'Estudiantes y planes', s: 'Agregar, editar y asignar plan' },
+  { v: 'inventario', i: '📦', t: 'Inventario', s: 'Productos, entradas y conteos' },
+  { v: 'cuenta', i: '🔑', t: 'Mi cuenta', s: 'Cambiar clave y usuarios' },
 ];
 const CONSULTAR = [
   { v: 'hoy', i: '📅', t: 'Resumen del día', s: 'Lo que entró y salió' },
@@ -160,11 +171,13 @@ function Inicio({ nombre, ir }: { nombre: string; ir: (v: string) => void }) {
   );
   return (
     <div>
-      <div className="saludo"><h1>{saludo}, {nombre}</h1><p>¿Qué vas a registrar?</p></div>
+      <div className="saludo"><p className="ceja">Vox Corpus Danza · Registros</p><h1>{saludo}, {nombre}</h1><p>¿Qué vas a registrar hoy?</p></div>
       <div className="grupo-titulo">Registrar</div>
       <div className="mosaico">{REGISTRAR.map(Baldosa)}</div>
       <div className="grupo-titulo">Consultar</div>
       <div className="mosaico">{CONSULTAR.map(b => Baldosa({ ...b, principal: false }))}</div>
+      <div className="grupo-titulo">Administrar</div>
+      <div className="mosaico">{ADMINISTRAR.map(b => Baldosa({ ...b, principal: false }))}</div>
     </div>
   );
 }

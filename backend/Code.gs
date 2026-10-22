@@ -16,7 +16,7 @@
 // Hoja de cálculo que sirve de base de datos (Registros Vox Corpus Danza, cuenta voxcorpusdanza@gmail.com).
 const HOJA_ID = '1XWxLoazHg4dCTqvaM0E2ZQYFzcL0XjNFcp_xQ4B51p0';
 const TZ = 'America/Bogota';
-const VERSION = '1.0.1';
+const VERSION = '1.1.0';
 const SESION_SEG = 6 * 60 * 60;          // máximo que permite CacheService
 const INTENTOS_MAX = 5;                  // claves erradas antes de bloquear
 const BLOQUEO_SEG = 15 * 60;
@@ -26,12 +26,21 @@ const H = {
   PRENDAS: 'Prendas del pedido', PAGO_PROFES: 'Pago profes', GASTOS: 'Gastos', TRASLADOS: 'Traslados',
   ESTUDIANTES: 'Estudiantes', PRODUCTOS: 'Productos', CAT_PRENDAS: 'Prendas uniforme', CONCEPTOS: 'Conceptos',
   PROFES: 'Profes', CUENTAS: 'Cuentas', LISTAS: 'Listas', USUARIOS: 'Usuarios', BITACORA: 'Bitácora',
+  INVENTARIO: 'Inventario', PLANES: 'Planes',
 };
+
+// Pestañas que configurar() crea si no existen.
+const HOJAS_NUEVAS = {
+  'Inventario': ['id', 'fecha', 'producto_id', 'producto', 'tipo', 'cantidad', 'costo_unitario', 'nota',
+    'registrado_por', 'registrado_en', 'estado', 'motivo_anulacion', 'anulado_por', 'anulado_en'],
+  'Planes': ['id', 'nombre', 'valor_mensual', 'activo', 'nota'],
+};
+const TIPOS_INVENTARIO = ['Entrada', 'Conteo', 'Salida'];
 
 // Hojas de registros que se pueden anular. "grupo" = columna que junta varias líneas de un mismo registro.
 const ANULABLES = {
   'Pagos': null, 'Cargos': null, 'Ventas tienda': 'venta', 'Pedidos uniforme': null,
-  'Pago profes': 'pago', 'Gastos': null, 'Traslados': null,
+  'Pago profes': 'pago', 'Gastos': null, 'Traslados': null, 'Inventario': null,
 };
 
 // Columnas que configurar() agrega si la hoja no las tiene.
@@ -43,7 +52,8 @@ const COLUMNAS_EXTRA = {
   'Pago profes': ['anulado_por', 'anulado_en'],
   'Gastos': ['anulado_por', 'anulado_en'],
   'Traslados': ['anulado_por', 'anulado_en'],
-  'Usuarios': ['clave_nueva'],
+  'Usuarios': ['clave_nueva', 'sesion_v'],
+  'Estudiantes': ['actualizado_por', 'actualizado_en'],
 };
 const BITACORA_COLS = ['fecha_hora', 'usuario', 'accion', 'hoja', 'id', 'detalle'];
 
@@ -94,6 +104,16 @@ const ACCIONES = {
   registrarTraslado:   [registrarTraslado_, true],
   agregarEstudiante:   [agregarEstudiante_, true],
   anular:              [anular_, true],
+  listarEstudiantes:   [listarEstudiantes_, false],
+  editarEstudiante:    [editarEstudiante_, true],
+  guardarPlan:         [guardarPlan_, true],
+  reporteInventario:   [reporteInventario_, false],
+  registrarProducto:   [registrarProducto_, true],
+  editarProducto:      [editarProducto_, true],
+  movimientoInventario:[movimientoInventario_, true],
+  cambiarClave:        [cambiarClave_, true],
+  restablecerClave:    [restablecerClave_, true],
+  listarUsuarios:      [listarUsuarios_, false],
 };
 
 function enrutar_(body) {
@@ -133,7 +153,7 @@ function login_(usuario, clave) {
   }
   cache.remove(kf);
   const token = Utilities.getUuid();
-  const ses = { usuario: usuario, nombre: String(u.nombre), rol: String(u.rol), v: versionSesiones_() };
+  const ses = { usuario: usuario, nombre: String(u.nombre), rol: String(u.rol), v: versionSesiones_(), uv: String(u.sesion_v || '0') };
   cache.put('s:' + token, JSON.stringify(ses), SESION_SEG);
   bitacora_(ses, 'login', H.USUARIOS, usuario, {});
   return { token: token, nombre: ses.nombre, rol: ses.rol, dura_horas: SESION_SEG / 3600 };
@@ -153,7 +173,9 @@ function sesion_(token) {
   if (ses.v !== versionSesiones_()) throw err_('Tu sesión terminó. Vuelve a entrar.', 'sesion');
   const u = tabla_(H.USUARIOS).filas.find(f => norm_(f.usuario) === ses.usuario);
   if (!u || !esSi_(u.activo)) throw err_('Tu usuario está desactivado.', 'sesion');
+  if ((ses.uv || '0') !== String(u.sesion_v || '0')) throw err_('Tu clave cambió. Vuelve a entrar.', 'sesion');
   cache.put('s:' + token, raw, SESION_SEG); // se renueva con cada uso
+  ses.token = token;
   return ses;
 }
 
@@ -177,7 +199,9 @@ function catalogos_(d, ses) {
     hoy: ymd_(new Date()),
     estudiantes: activos_(H.ESTUDIANTES).map(f => ({ id: f.id, nombre: f.nombre, plan: f.plan || '' }))
       .sort((a, b) => a.nombre.localeCompare(b.nombre, 'es')),
-    productos: activos_(H.PRODUCTOS).map(f => ({ id: f.id, nombre: f.nombre, precio: num_(f.precio) })),
+    productos: (() => { const st = stocks_(); return activos_(H.PRODUCTOS).map(f => ({ id: f.id, nombre: f.nombre, precio: num_(f.precio),
+      stock: st[f.id] ? st[f.id].stock : null })); })(),
+    planes: hojaExiste_(H.PLANES) ? activos_(H.PLANES).map(f => ({ id: f.id, nombre: f.nombre, valor_mensual: num_(f.valor_mensual) })) : [],
     prendas: activos_(H.CAT_PRENDAS).map(f => ({ id: f.id, nombre: f.nombre, precio: num_(f.precio),
       incluye: String(f.incluye || f.nombre).split(',').map(s => s.trim()).filter(Boolean) })),
     conceptos: activos_(H.CONCEPTOS).map(f => ({ id: f.id, nombre: f.nombre, valor_base: num_(f.valor_base), usa_cargos: String(f.usa_cargos || '') })),
@@ -400,7 +424,7 @@ function agregarEstudiante_(d, ses) {
   const nombre = requerido_(d.nombre, 'nombre').replace(/\s+/g, ' ');
   const ya = tabla_(H.ESTUDIANTES).filas.find(f => norm_(f.nombre) === norm_(nombre));
   if (ya) throw err_('Ya existe: ' + ya.nombre + ' (' + ya.id + ')' + (esSi_(ya.activo) ? '' : ', marcado como inactivo'), 'duplicado');
-  const e = { id: siguienteId_(H.ESTUDIANTES, 'id', 'E', 3), nombre: nombre, plan: texto_(d.plan), activo: 'Sí',
+  const e = { id: siguienteId_(H.ESTUDIANTES, 'id', 'E', 3), nombre: nombre, plan: planValido_(d.plan), activo: 'Sí',
     nota: 'Agregado por ' + ses.nombre + ' el ' + ymd_(new Date()) };
   insertar_(H.ESTUDIANTES, [e]);
   bitacora_(ses, 'agregarEstudiante', H.ESTUDIANTES, e.id, e);
@@ -428,11 +452,253 @@ function anular_(d, ses) {
   return { id: d.id, lineas: filas.length, avisos: avisos };
 }
 
+// ===================================================================== administración
+
+function soloDirector_(ses) {
+  if (norm_(ses.rol) !== 'director') throw err_('Solo los directores pueden hacer esto.', 'permiso');
+}
+
+function hojaExiste_(nombre) { return !!libro_().getSheetByName(nombre); }
+function tiempo_(v) { return v instanceof Date ? v.getTime() : (Date.parse(v) || 0); }
+
+// ---------- estudiantes y planes
+
+function planValido_(plan) {
+  const p = texto_(plan);
+  if (!p || !hojaExiste_(H.PLANES)) return p;
+  const f = tabla_(H.PLANES).filas.find(x => norm_(x.nombre) === norm_(p));
+  if (!f) throw err_('El plan "' + p + '" no existe. Créalo primero en Planes.');
+  return f.nombre;
+}
+
+function listarEstudiantes_() {
+  const planes = hojaExiste_(H.PLANES) ? tabla_(H.PLANES).filas.filter(f => f.id) : [];
+  const usos = {};
+  const est = tabla_(H.ESTUDIANTES).filas.filter(f => f.id).map(f => {
+    const activo = norm_(f.activo) !== 'no';
+    if (activo && f.plan) usos[norm_(f.plan)] = (usos[norm_(f.plan)] || 0) + 1;
+    return { id: f.id, nombre: f.nombre, plan: f.plan || '', activo: activo, nota: f.nota || '' };
+  }).sort((a, b) => String(a.nombre).localeCompare(String(b.nombre), 'es'));
+  return {
+    estudiantes: est,
+    planes: planes.map(p => ({ id: p.id, nombre: p.nombre, valor_mensual: num_(p.valor_mensual), activo: norm_(p.activo) !== 'no',
+      nota: p.nota || '', estudiantes: usos[norm_(p.nombre)] || 0 })),
+  };
+}
+
+function editarEstudiante_(d, ses) {
+  const t = tabla_(H.ESTUDIANTES);
+  const e = t.filas.find(f => f.id === d.id);
+  if (!e) throw err_('No encontré el estudiante ' + d.id);
+  const cambios = {};
+  if (d.nombre !== undefined) {
+    const nombre = requerido_(d.nombre, 'nombre').replace(/\s+/g, ' ');
+    const ya = t.filas.find(f => f.id !== e.id && norm_(f.nombre) === norm_(nombre));
+    if (ya) throw err_('Ya existe otro estudiante con ese nombre: ' + ya.nombre + ' (' + ya.id + ')', 'duplicado');
+    if (nombre !== e.nombre) cambios.nombre = nombre;
+  }
+  if (d.plan !== undefined && texto_(d.plan) !== String(e.plan || '')) cambios.plan = planValido_(d.plan);
+  if (d.activo !== undefined) { const a = d.activo ? 'Sí' : 'No'; if ((norm_(e.activo) !== 'no') !== !!d.activo) cambios.activo = a; }
+  if (!Object.keys(cambios).length) throw err_('No hay cambios para guardar.');
+  const antes = {};
+  Object.keys(cambios).forEach(k => antes[k] = e[k]);
+  cambios.actualizado_por = ses.nombre;
+  cambios.actualizado_en = new Date();
+  actualizar_(t, e, cambios);
+  let renombrados = 0;
+  if (cambios.nombre) [H.PAGOS, H.CARGOS, H.PEDIDOS, H.VENTAS].forEach(h => renombrados += renombrar_(h, e.id, cambios.nombre));
+  bitacora_(ses, 'editarEstudiante', H.ESTUDIANTES, e.id, { antes: antes, despues: cambios, registros_renombrados: renombrados });
+  return { id: e.id, renombrados: renombrados };
+}
+
+// Cambia el nombre guardado en los registros de un estudiante (una sola escritura por pestaña).
+function renombrar_(hoja, estudianteId, nombre) {
+  const sh = hoja_(hoja);
+  const n = sh.getLastRow() - 1;
+  if (n < 1) return 0;
+  const headers = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0].map(h => String(h).trim());
+  const ci = headers.indexOf('estudiante_id'), cn = headers.indexOf('estudiante');
+  if (ci < 0 || cn < 0) return 0;
+  const ids = sh.getRange(2, ci + 1, n, 1).getValues();
+  const col = sh.getRange(2, cn + 1, n, 1);
+  const nombres = col.getValues();
+  let c = 0;
+  ids.forEach((r, i) => { if (r[0] === estudianteId && nombres[i][0] !== nombre) { nombres[i][0] = nombre; c++; } });
+  if (c) col.setValues(nombres);
+  return c;
+}
+
+function guardarPlan_(d, ses) {
+  if (!hojaExiste_(H.PLANES)) throw err_('Falta la pestaña Planes: ejecuta "configurar" en Apps Script.');
+  const t = tabla_(H.PLANES);
+  const nombre = requerido_(d.nombre, 'nombre del plan').replace(/\s+/g, ' ');
+  const valor = d.valor_mensual === undefined || d.valor_mensual === '' ? '' : monto_(d.valor_mensual, true);
+  const otro = t.filas.find(f => f.id !== d.id && norm_(f.nombre) === norm_(nombre));
+  if (otro) throw err_('Ya existe un plan con ese nombre.', 'duplicado');
+  if (!d.id) {
+    const p = { id: siguienteId_(H.PLANES, 'id', 'PL', 2), nombre: nombre, valor_mensual: valor, activo: 'Sí', nota: texto_(d.nota) };
+    insertar_(H.PLANES, [p]);
+    bitacora_(ses, 'crearPlan', H.PLANES, p.id, p);
+    return { id: p.id };
+  }
+  const p = t.filas.find(f => f.id === d.id);
+  if (!p) throw err_('No encontré el plan ' + d.id);
+  const cambios = { nombre: nombre, valor_mensual: valor };
+  if (d.activo !== undefined) cambios.activo = d.activo ? 'Sí' : 'No';
+  if (d.nota !== undefined) cambios.nota = texto_(d.nota);
+  const antes = { nombre: p.nombre, valor_mensual: p.valor_mensual, activo: p.activo };
+  actualizar_(t, p, cambios);
+  // Si cambió el nombre, se actualiza en los estudiantes que lo tenían.
+  let movidos = 0;
+  if (norm_(antes.nombre) !== norm_(nombre)) {
+    const te = tabla_(H.ESTUDIANTES);
+    te.filas.filter(e => norm_(e.plan) === norm_(antes.nombre)).forEach(e => { actualizar_(te, e, { plan: nombre }); movidos++; });
+  }
+  bitacora_(ses, 'editarPlan', H.PLANES, p.id, { antes: antes, despues: cambios, estudiantes_actualizados: movidos });
+  return { id: p.id, estudiantes_actualizados: movidos };
+}
+
+// ---------- productos e inventario
+
+// Existencias: un "Conteo" fija la cantidad; "Entrada" suma; "Salida" y cada venta restan.
+// Las ventas solo restan desde que el producto tiene su primer conteo o entrada.
+function stocks_() {
+  const ev = [];
+  if (hojaExiste_(H.INVENTARIO)) tabla_(H.INVENTARIO).filas.filter(esValido_).forEach(m =>
+    ev.push({ t: tiempo_(m.registrado_en), p: m.producto_id, tipo: norm_(m.tipo), n: num_(m.cantidad), fecha: m.fecha }));
+  tabla_(H.VENTAS).filas.filter(v => esValido_(v) && v.producto_id).forEach(v =>
+    ev.push({ t: tiempo_(v.registrado_en), p: v.producto_id, tipo: 'venta', n: num_(v.cantidad), fecha: v.fecha }));
+  ev.sort((a, b) => a.t - b.t);
+  const s = {};
+  ev.forEach(e => {
+    const x = s[e.p] || (s[e.p] = { stock: null, ultimo_conteo: '', entradas: 0, salidas: 0 });
+    if (e.tipo === 'conteo') { x.stock = e.n; x.ultimo_conteo = ymd_(e.fecha); }
+    else if (e.tipo === 'entrada') { x.stock = (x.stock || 0) + e.n; x.entradas += e.n; }
+    else if (e.tipo === 'salida') { x.stock = (x.stock || 0) - e.n; x.salidas += e.n; }
+    else if (e.tipo === 'venta' && x.stock !== null) x.stock -= e.n;
+  });
+  return s;
+}
+
+function reporteInventario_(d) {
+  const rango = rango_(d);
+  const st = stocks_();
+  const vendidas = {};
+  tabla_(H.VENTAS).filas.filter(v => esValido_(v) && v.producto_id && enRango_(v.fecha, rango) && norm_(v.metodo) !== 'consumo interno')
+    .forEach(v => { const x = vendidas[v.producto_id] || (vendidas[v.producto_id] = { cantidad: 0, total: 0 }); x.cantidad += num_(v.cantidad); x.total += num_(v.total); });
+  const productos = tabla_(H.PRODUCTOS).filas.filter(f => f.id).map(f => {
+    const s = st[f.id] || { stock: null, ultimo_conteo: '', entradas: 0, salidas: 0 };
+    const v = vendidas[f.id] || { cantidad: 0, total: 0 };
+    return { id: f.id, nombre: f.nombre, precio: num_(f.precio), activo: norm_(f.activo) !== 'no', stock: s.stock,
+      ultimo_conteo: s.ultimo_conteo, vendidas: v.cantidad, total_vendido: v.total };
+  }).sort((a, b) => (Number(b.activo) - Number(a.activo)) || String(a.nombre).localeCompare(String(b.nombre), 'es'));
+  const movs = hojaExiste_(H.INVENTARIO) ? tabla_(H.INVENTARIO).filas.slice(-60).reverse().map(limpio_) : [];
+  return { desde: rango.desde, hasta: rango.hasta, productos: productos, movimientos: movs };
+}
+
+function registrarProducto_(d, ses) {
+  const nombre = requerido_(d.nombre, 'nombre del producto').replace(/\s+/g, ' ');
+  const ya = tabla_(H.PRODUCTOS).filas.find(f => norm_(f.nombre) === norm_(nombre));
+  if (ya) throw err_('Ya existe ' + ya.nombre + (norm_(ya.activo) === 'no' ? ' (inactivo: actívalo en vez de crearlo)' : ''), 'duplicado');
+  const p = { id: siguienteId_(H.PRODUCTOS, 'id', 'T', 2), nombre: nombre, precio: monto_(d.precio), activo: 'Sí' };
+  insertar_(H.PRODUCTOS, [p]);
+  let mov = null;
+  if (d.cantidad_inicial !== undefined && d.cantidad_inicial !== '' && d.cantidad_inicial !== null) {
+    mov = insertarMovimiento_({ producto_id: p.id, tipo: 'Conteo', cantidad: d.cantidad_inicial, costo_unitario: d.costo_unitario, fecha: d.fecha, nota: 'Cantidad inicial al crear el producto' }, ses, p);
+  }
+  bitacora_(ses, 'registrarProducto', H.PRODUCTOS, p.id, { producto: p, inventario: mov });
+  return { id: p.id, movimiento: mov };
+}
+
+function editarProducto_(d, ses) {
+  const t = tabla_(H.PRODUCTOS);
+  const p = t.filas.find(f => f.id === d.id);
+  if (!p) throw err_('No encontré el producto ' + d.id);
+  const cambios = {};
+  if (d.nombre !== undefined) {
+    const nombre = requerido_(d.nombre, 'nombre').replace(/\s+/g, ' ');
+    const otro = t.filas.find(f => f.id !== p.id && norm_(f.nombre) === norm_(nombre));
+    if (otro) throw err_('Ya existe otro producto con ese nombre.', 'duplicado');
+    if (nombre !== p.nombre) cambios.nombre = nombre;
+  }
+  if (d.precio !== undefined && monto_(d.precio) !== num_(p.precio)) cambios.precio = monto_(d.precio);
+  if (d.activo !== undefined && (norm_(p.activo) !== 'no') !== !!d.activo) cambios.activo = d.activo ? 'Sí' : 'No';
+  if (!Object.keys(cambios).length) throw err_('No hay cambios para guardar.');
+  const antes = {};
+  Object.keys(cambios).forEach(k => antes[k] = p[k]);
+  actualizar_(t, p, cambios);
+  bitacora_(ses, 'editarProducto', H.PRODUCTOS, p.id, { antes: antes, despues: cambios });
+  return { id: p.id };
+}
+
+function movimientoInventario_(d, ses) {
+  const p = tabla_(H.PRODUCTOS).filas.find(f => f.id === d.producto_id);
+  if (!p) throw err_('Escoge el producto.');
+  const mov = insertarMovimiento_(d, ses, p);
+  bitacora_(ses, 'movimientoInventario', H.INVENTARIO, mov.id, mov);
+  const st = stocks_()[p.id];
+  return { id: mov.id, stock: st ? st.stock : null };
+}
+
+function insertarMovimiento_(d, ses, p) {
+  if (!hojaExiste_(H.INVENTARIO)) throw err_('Falta la pestaña Inventario: ejecuta "configurar" en Apps Script.');
+  const tipo = TIPOS_INVENTARIO.find(x => norm_(x) === norm_(d.tipo));
+  if (!tipo) throw err_('Tipo de movimiento no válido: ' + d.tipo);
+  const n = Number(d.cantidad);
+  if (!Number.isInteger(n) || n < 0 || (tipo !== 'Conteo' && n === 0)) throw err_('La cantidad debe ser un número entero' + (tipo === 'Conteo' ? ' (puede ser 0).' : ' mayor que cero.'));
+  const m = { id: siguienteId_(H.INVENTARIO, 'id', 'I', 4), fecha: fecha_(d.fecha), producto_id: p.id, producto: p.nombre, tipo: tipo,
+    cantidad: n, costo_unitario: d.costo_unitario ? monto_(d.costo_unitario, true) : '', nota: texto_(d.nota) };
+  insertar_(H.INVENTARIO, [auditar_(m, ses)]);
+  return m;
+}
+
+// ---------- claves
+
+function cambiarClave_(d, ses) {
+  const t = tabla_(H.USUARIOS);
+  const u = t.filas.find(f => norm_(f.usuario) === ses.usuario);
+  if (!u) throw err_('Usuario no encontrado');
+  if (!u.clave_hash || u.clave_hash !== hash_(String(d.actual || ''))) throw err_('La clave actual no es correcta.', 'credenciales');
+  const nueva = String(d.nueva || '');
+  if (nueva.length < 6) throw err_('La clave nueva debe tener mínimo 6 caracteres.');
+  if (nueva === String(d.actual)) throw err_('La clave nueva debe ser diferente a la actual.');
+  const v = String(Number(u.sesion_v || 0) + 1);
+  actualizar_(t, u, { clave_hash: hash_(nueva), sesion_v: v });
+  // Cierra las demás sesiones de este usuario y entrega un pase nuevo para seguir trabajando.
+  const cache = CacheService.getScriptCache();
+  if (ses.token) cache.remove('s:' + ses.token);
+  const token = Utilities.getUuid();
+  const nueva_ses = { usuario: ses.usuario, nombre: ses.nombre, rol: ses.rol, v: versionSesiones_(), uv: v };
+  cache.put('s:' + token, JSON.stringify(nueva_ses), SESION_SEG);
+  bitacora_(ses, 'cambiarClave', H.USUARIOS, u.usuario, {});
+  return { token: token, nombre: ses.nombre, rol: ses.rol };
+}
+
+function restablecerClave_(d, ses) {
+  soloDirector_(ses);
+  const t = tabla_(H.USUARIOS);
+  const u = t.filas.find(f => norm_(f.usuario) === norm_(d.usuario));
+  if (!u) throw err_('No existe el usuario ' + d.usuario);
+  const nueva = String(d.nueva || '');
+  if (nueva.length < 6) throw err_('La clave debe tener mínimo 6 caracteres.');
+  actualizar_(t, u, { clave_hash: hash_(nueva), sesion_v: String(Number(u.sesion_v || 0) + 1) });
+  CacheService.getScriptCache().remove('f:' + norm_(u.usuario)); // quita el bloqueo por intentos fallidos
+  bitacora_(ses, 'restablecerClave', H.USUARIOS, u.usuario, { por: ses.nombre });
+  return { usuario: u.usuario, propia: norm_(u.usuario) === ses.usuario };
+}
+
+function listarUsuarios_(d, ses) {
+  soloDirector_(ses);
+  return { usuarios: tabla_(H.USUARIOS).filas.filter(f => f.usuario).map(f => ({ usuario: f.usuario, nombre: f.nombre, rol: f.rol,
+    activo: esSi_(f.activo), tiene_clave: !!f.clave_hash })) };
+}
+
 // ===================================================================== consultas y reportes
 
 function registros_(d) {
   const hoja = String(d.hoja || '');
   const permitidas = Object.keys(ANULABLES).concat([H.PRENDAS, H.ESTUDIANTES, H.BITACORA]);
+  if (!hojaExiste_(hoja)) return { total: 0, filas: [] };
   if (permitidas.indexOf(hoja) < 0) throw err_('Hoja no disponible: ' + hoja);
   const desde = d.desde ? ymd_(fecha_(d.desde)) : '';
   const hasta = d.hasta ? ymd_(fecha_(d.hasta)) : '';
@@ -837,6 +1103,23 @@ function configurar() {
       sh.getRange(1, col).setValue(c).setFontWeight('bold').setFontColor('#FFFFFF').setBackground('#1F1229');
     });
   });
+  Object.keys(HOJAS_NUEVAS).forEach(nombre => {
+    if (ss.getSheetByName(nombre)) return;
+    const sh = ss.insertSheet(nombre);
+    const cols = HOJAS_NUEVAS[nombre];
+    sh.getRange(1, 1, 1, cols.length).setValues([cols]).setFontWeight('bold').setFontColor('#FFFFFF').setBackground('#1F1229');
+    sh.setFrozenRows(1);
+    if (nombre === H.PLANES) {
+      // Se siembran los planes que ya tienen los estudiantes; el valor mensual queda para llenarlo.
+      const vistos = {};
+      const filas = [];
+      tabla_(H.ESTUDIANTES).filas.forEach(e => {
+        const p = String(e.plan || '').replace(/\s+/g, ' ').trim();
+        if (p && !vistos[norm_(p)]) { vistos[norm_(p)] = true; filas.push(['PL' + pad_(filas.length + 1, 2), p, '', 'Sí', '']); }
+      });
+      if (filas.length) sh.getRange(2, 1, filas.length, cols.length).setValues(filas);
+    }
+  });
   let b = ss.getSheetByName(H.BITACORA);
   if (!b) {
     b = ss.insertSheet(H.BITACORA);
@@ -864,7 +1147,7 @@ function fijarClave_(usuario, clave) {
   const t = tabla_(H.USUARIOS);
   const u = t.filas.find(f => norm_(f.usuario) === norm_(usuario));
   if (!u) return 'No existe el usuario "' + usuario + '" en la pestaña Usuarios.';
-  actualizar_(t, u, { clave_hash: hash_(clave) });
+  actualizar_(t, u, Object.assign({ clave_hash: hash_(clave) }, t.headers.indexOf('sesion_v') >= 0 ? { sesion_v: String(Number(u.sesion_v || 0) + 1) } : {}));
   bitacora_({ nombre: 'Editor de la hoja' }, 'asignarClave', H.USUARIOS, u.usuario, {});
   return 'Clave guardada para ' + u.nombre + '.';
 }
@@ -882,7 +1165,7 @@ function aplicarClavesNuevas() {
     const nueva = String(u.clave_nueva || '').trim();
     if (!nueva) return;
     if (nueva.length < 6) { res.push(u.usuario + ': la clave debe tener mínimo 6 caracteres, no se guardó'); return; }
-    actualizar_(t, u, { clave_hash: hash_(nueva), clave_nueva: '' });
+    actualizar_(t, u, Object.assign({ clave_hash: hash_(nueva), clave_nueva: '' }, t.headers.indexOf('sesion_v') >= 0 ? { sesion_v: String(Number(u.sesion_v || 0) + 1) } : {}));
     bitacora_({ nombre: 'Editor del script' }, 'asignarClave', H.USUARIOS, u.usuario, {});
     res.push(u.usuario + ': clave guardada');
   });

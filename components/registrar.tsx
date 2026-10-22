@@ -14,13 +14,16 @@ type Ficha = {
 /** Resumen de lo que debe un estudiante, para que Majo lo vea al registrar. */
 export function ResumenQuien({ q }: { q: Quien }) {
   const [f, setF] = useState<Ficha | null>(null);
+  const [cargando, setCargando] = useState(false);
   useEffect(() => {
     setF(null);
     if (!q?.estudiante_id) return;
     let vivo = true;
-    api<Ficha>('fichaEstudiante', { estudiante_id: q.estudiante_id }).then(r => vivo && setF(r)).catch(() => {});
+    setCargando(true);
+    api<Ficha>('fichaEstudiante', { estudiante_id: q.estudiante_id }).then(r => vivo && setF(r)).catch(() => {}).finally(() => vivo && setCargando(false));
     return () => { vivo = false; };
   }, [q?.estudiante_id]);
+  if (q?.estudiante_id && cargando) return <div className="cargando" style={{ padding: '8px 0', fontSize: 13 }}><span className="girando chico" />Revisando lo que debe…</div>;
   if (!q?.estudiante_id || !f) return null;
   const items: { t: string; s: number }[] = [
     ...f.cargos.map(c => ({ t: c.concepto + (c.cantidad > 1 ? ` (${c.cantidad})` : ''), s: c.saldo })),
@@ -58,11 +61,24 @@ export function RegistrarPago() {
   }, [esUniforme]);
   const pedidosDeQuien = useMemo(() => pedidos.filter(p => quien && (quien.estudiante_id ? p.estudiante_id === quien.estudiante_id : norm(p.quien) === norm(quien.persona))), [pedidos, quien]);
 
+  const planDe = (q: Quien) => {
+    const e = q?.estudiante_id ? cat.estudiantes.find(x => x.id === q.estudiante_id) : undefined;
+    return e?.plan ? (cat.planes || []).find(p => norm(p.nombre) === norm(e.plan)) || { nombre: e.plan, valor_mensual: 0 } : null;
+  };
+  const plan = planDe(quien);
+  const valorSugerido = (c: string, q: Quien) => {
+    if (norm(c) === 'mensualidad') return planDe(q)?.valor_mensual || 0;
+    return cat.conceptos.find(x => x.nombre === c)?.valor_base || 0;
+  };
   const elegirConcepto = (c: string) => {
     setConcepto(c);
-    const k = cat.conceptos.find(x => x.nombre === c);
-    if (k?.valor_base) setValor(k.valor_base);
+    const v = valorSugerido(c, quien);
+    if (v) setValor(v);
     setPedido('');
+  };
+  const elegirQuien = (q: Quien) => {
+    setQuien(q);
+    if (concepto) { const v = valorSugerido(concepto, q); if (v) setValor(v); }
   };
   const elegirMetodo = (m: string) => { setMetodo(m); setRecibido(cuentaPorMetodo(m, cat)); };
 
@@ -73,7 +89,7 @@ export function RegistrarPago() {
       aviso(`Pago guardado (${r.id}): ${quien?.nombre} · ${concepto} · ${pesos(valor)}`);
       setQuien(null); setValor(0); setNota(''); setPedido(''); setClave(k => k + 1);
       const k = cat.conceptos.find(x => x.nombre === concepto);
-      if (k?.valor_base) setValor(k.valor_base);
+      if (k?.valor_base && norm(concepto) !== 'mensualidad') setValor(k.valor_base);
     }
   };
 
@@ -82,7 +98,7 @@ export function RegistrarPago() {
       <div className="tarjeta">
         <div className="rejilla">
           <div style={{ gridColumn: '1 / -1' }} key={clave}>
-            <BuscarQuien valor={quien} onChange={setQuien} />
+            <BuscarQuien valor={quien} onChange={elegirQuien} />
             <ResumenQuien q={quien} />
           </div>
           <Campo label="Concepto">
@@ -94,7 +110,9 @@ export function RegistrarPago() {
                 opciones={pedidosDeQuien.map(p => ({ v: p.pedido, t: `${p.pedido} · debe ${pesos(p.saldo)}` }))} />
             </Campo>
           )}
-          <Campo label="Valor"><Monto valor={valor} onChange={setValor} /></Campo>
+          <Campo label="Valor" ayuda={norm(concepto) === 'mensualidad' ? (plan ? (plan.valor_mensual ? `${plan.nombre}: ${pesos(plan.valor_mensual)} al mes` : `${plan.nombre} no tiene valor mensual. Ponlo en Estudiantes → Planes.`) : quien?.estudiante_id ? 'Este estudiante no tiene plan asignado.' : undefined) : undefined}>
+            <Monto valor={valor} onChange={setValor} />
+          </Campo>
           <Campo label="Fecha"><input type="date" value={fecha} max={hoy()} onChange={e => setFecha(e.target.value)} /></Campo>
           <Campo label="Método de pago" ancho><Segmentado opciones={metodos} valor={metodo} onChange={elegirMetodo} /></Campo>
           <Campo label="¿A dónde entró la plata?" ancho ayuda={metodo !== 'Efectivo' ? `Sugerida por la fecha: ${cat.cuenta_sugerida}. Cámbiala si la familia transfirió a otra.` : undefined}>

@@ -39,7 +39,31 @@ function guardarSesion(s: Sesion | null) {
 
 let sesionMemoria: Sesion | null = null;
 
+// Cuántas consultas van en camino: la página muestra una barra de carga mientras sea mayor que cero.
+let pendientes = 0;
+const oyentes = new Set<(n: number) => void>();
+export function escucharCarga(fn: (n: number) => void) {
+  oyentes.add(fn);
+  return () => { oyentes.delete(fn); };
+}
+const avisarCarga = (d: number) => { pendientes = Math.max(0, pendientes + d); oyentes.forEach(f => f(pendientes)); };
+
+/** Reemplaza el pase guardado (por ejemplo, después de cambiar la clave). */
+export function reemplazarSesion(s: Sesion) {
+  sesionMemoria = s;
+  guardarSesion(s);
+}
+
 async function enviar(cuerpo: unknown) {
+  avisarCarga(1);
+  try {
+    return await enviarSinContar(cuerpo);
+  } finally {
+    avisarCarga(-1);
+  }
+}
+
+async function enviarSinContar(cuerpo: unknown) {
   if (!API_URL) throw new ErrorApi('Falta configurar la dirección del backend (NEXT_PUBLIC_API_URL).');
   let res: Response;
   try {

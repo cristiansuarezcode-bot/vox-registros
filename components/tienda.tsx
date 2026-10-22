@@ -5,7 +5,7 @@ import { hoy, norm, pesos } from '@/lib/util';
 import { BuscarQuien, Campo, Pantalla, Segmentado, cuentasBanco, datosQuien, useAccion, useApp } from './ui';
 
 export function Tienda() {
-  const { cat, aviso, ir } = useApp();
+  const { cat, aviso, ir, recargarCat } = useApp();
   const { ocupado, correr } = useAccion();
   const metodos = (cat.listas.metodo_tienda || ['Efectivo', 'Transferencia', 'Fiado', 'Consumo interno']).map(String);
   const internos = (cat.listas.consumo_interno || []).map(String);
@@ -34,11 +34,16 @@ export function Tienda() {
     if (r) {
       aviso(`Venta ${r.venta} guardada: ${pesos(r.total)}${m === 'fiado' ? ' fiado a ' + quien?.nombre : ''}`);
       setCarrito({}); setQuien(null); setInterno(''); setMetodo('Efectivo'); setClave(k => k + 1);
+      if (lineas.some(l => typeof l.stock === 'number')) recargarCat();
     }
   };
 
   return (
     <Pantalla titulo="Tienda" sub="Toca los productos para agregarlos a la venta">
+      <div className="acciones mt0" style={{ marginTop: -6, marginBottom: 12 }}>
+        <button className="btn secundario chico" onClick={() => ir('inventario')}>Inventario y productos</button>
+        <button className="btn secundario chico" onClick={() => ir('reporteTienda')}>Ventas y fiados</button>
+      </div>
       <div className="dos-columnas">
         <div className="tarjeta">
           <div className="campo" style={{ marginBottom: 10 }}>
@@ -48,6 +53,8 @@ export function Tienda() {
             {visibles.map(p => (
               <button key={p.id} className="producto" disabled={ocupado} onClick={() => sumar(p.id, 1)}>
                 <b>{p.nombre}</b><span>{pesos(p.precio)}</span>
+                {typeof p.stock === 'number' && (() => { const q = p.stock - (carrito[p.id] || 0); return (
+                  <span className={'existencias' + (q <= 0 ? ' cero' : q <= 3 ? ' bajo' : '')}>{q <= 0 ? 'Agotado' : `Quedan ${q}`}</span>); })()}
                 {carrito[p.id] ? <span className="cant">{carrito[p.id]}</span> : null}
               </button>
             ))}
@@ -79,9 +86,6 @@ export function Tienda() {
           <div className="acciones">
             <button className="btn" style={{ flex: 1 }} disabled={!listo || ocupado} onClick={guardar}>{ocupado ? 'Guardando…' : `Guardar venta de ${pesos(total)}`}</button>
             {lineas.length > 0 && <button className="btn secundario" onClick={() => setCarrito({})}>Vaciar</button>}
-          </div>
-          <div className="acciones" style={{ marginTop: 8 }}>
-            <button className="enlace" onClick={() => ir('reporteTienda')}>Ver ventas y fiados →</button>
           </div>
         </div>
       </div>
