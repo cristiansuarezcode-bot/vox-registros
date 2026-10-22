@@ -249,3 +249,15 @@ table.tabla { width: 100%; border-collapse: collapse; font-size: 14px; }
 .derecha { text-align: right; }
 .suave { color: var(--suave); }
 .mt0 { margin-top: 0; }
+
+/* En celular, las tablas con botones se muestran como tarjetas (una por fila). */
+@media (max-width: 640px) {
+  .tabla.tarjetas thead { display: none; }
+  .tabla.tarjetas, .tabla.tarjetas tbody, .tabla.tarjetas tr, .tabla.tarjetas td { display: block; width: 100%; }
+  .tabla.tarjetas tr { border: 1px solid var(--linea); border-radius: var(--radio); padding: 10px 12px; margin-bottom: 10px; background: #fff; }
+  .tabla.tarjetas td { border: 0; padding: 3px 0; text-align: left !important; white-space: normal !important; }
+  .tabla.tarjetas td[data-label]::before { content: attr(data-label); display: block; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .07em; color: var(--suave); }
+  .tabla.tarjetas td.acciones-fila { padding-top: 8px; display: flex; gap: 8px; flex-wrap: wrap; }
+  .tabla.tarjetas td.acciones-fila .btn { flex: 1; }
+}
+@media (max-width: 640px) { .tabla.tarjetas td.solo-escritorio { display: none; } }

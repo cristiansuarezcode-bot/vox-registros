@@ -16,7 +16,7 @@
 // Hoja de cálculo que sirve de base de datos (Registros Vox Corpus Danza, cuenta voxcorpusdanza@gmail.com).
 const HOJA_ID = '1XWxLoazHg4dCTqvaM0E2ZQYFzcL0XjNFcp_xQ4B51p0';
 const TZ = 'America/Bogota';
-const VERSION = '1.1.0';
+const VERSION = '1.2.0';
 const SESION_SEG = 6 * 60 * 60;          // máximo que permite CacheService
 const INTENTOS_MAX = 5;                  // claves erradas antes de bloquear
 const BLOQUEO_SEG = 15 * 60;
@@ -54,6 +54,7 @@ const COLUMNAS_EXTRA = {
   'Traslados': ['anulado_por', 'anulado_en'],
   'Usuarios': ['clave_nueva', 'sesion_v'],
   'Estudiantes': ['actualizado_por', 'actualizado_en'],
+  'Profes': ['nota', 'actualizado_por', 'actualizado_en'],
 };
 const BITACORA_COLS = ['fecha_hora', 'usuario', 'accion', 'hoja', 'id', 'detalle'];
 
@@ -114,6 +115,8 @@ const ACCIONES = {
   cambiarClave:        [cambiarClave_, true],
   restablecerClave:    [restablecerClave_, true],
   listarUsuarios:      [listarUsuarios_, false],
+  listarProfes:        [listarProfes_, false],
+  guardarProfe:        [guardarProfe_, true],
 };
 
 function enrutar_(body) {
@@ -512,12 +515,12 @@ function editarEstudiante_(d, ses) {
 }
 
 // Cambia el nombre guardado en los registros de un estudiante (una sola escritura por pestaña).
-function renombrar_(hoja, estudianteId, nombre) {
+function renombrar_(hoja, estudianteId, nombre, colId, colNombre) {
   const sh = hoja_(hoja);
   const n = sh.getLastRow() - 1;
   if (n < 1) return 0;
   const headers = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0].map(h => String(h).trim());
-  const ci = headers.indexOf('estudiante_id'), cn = headers.indexOf('estudiante');
+  const ci = headers.indexOf(colId || 'estudiante_id'), cn = headers.indexOf(colNombre || 'estudiante');
   if (ci < 0 || cn < 0) return 0;
   const ids = sh.getRange(2, ci + 1, n, 1).getValues();
   const col = sh.getRange(2, cn + 1, n, 1);
@@ -556,6 +559,60 @@ function guardarPlan_(d, ses) {
   }
   bitacora_(ses, 'editarPlan', H.PLANES, p.id, { antes: antes, despues: cambios, estudiantes_actualizados: movidos });
   return { id: p.id, estudiantes_actualizados: movidos };
+}
+
+// ---------- profes
+// "Eliminar" un profe lo archiva: deja de salir para registrar pagos, pero su historial se conserva.
+
+function listarProfes_() {
+  const pagos = tabla_(H.PAGO_PROFES).filas.filter(esValido_);
+  const st = {};
+  pagos.forEach(p => {
+    const x = st[p.profe_id] || (st[p.profe_id] = { total: 0, clases: 0, pagos: {}, ultimo: '' });
+    x.total += num_(p.total); x.clases += num_(p.clases); x.pagos[p.pago] = true;
+    const f = p.fecha ? ymd_(p.fecha) : '';
+    if (f > x.ultimo) x.ultimo = f;
+  });
+  return { profes: tabla_(H.PROFES).filas.filter(f => f.id).map(f => {
+    const x = st[f.id] || { total: 0, clases: 0, pagos: {}, ultimo: '' };
+    return { id: f.id, nombre: f.nombre, valor_clase: num_(f.valor_clase), activo: norm_(f.activo) !== 'no', nota: f.nota || '',
+      total_pagado: x.total, clases: x.clases, pagos: Object.keys(x.pagos).length, ultimo_pago: x.ultimo };
+  }).sort((a, b) => (Number(b.activo) - Number(a.activo)) || String(a.nombre).localeCompare(String(b.nombre), 'es')) };
+}
+
+function guardarProfe_(d, ses) {
+  const t = tabla_(H.PROFES);
+  const conColumna = obj => { const o = {}; Object.keys(obj).forEach(k => { if (t.headers.indexOf(k) >= 0) o[k] = obj[k]; }); return o; };
+  const valor = d.valor_clase === undefined || d.valor_clase === '' || d.valor_clase === null ? '' : monto_(d.valor_clase);
+  if (!d.id) {
+    const nombre = requerido_(d.nombre, 'nombre del profe').replace(/\s+/g, ' ');
+    const ya = t.filas.find(f => norm_(f.nombre) === norm_(nombre));
+    if (ya) throw err_('Ya existe ' + ya.nombre + (norm_(ya.activo) === 'no' ? ' (eliminado: reactívalo en vez de crearlo de nuevo)' : ''), 'duplicado');
+    const p = { id: siguienteId_(H.PROFES, 'id', 'D', 2), nombre: nombre, valor_clase: valor, activo: 'Sí', nota: texto_(d.nota) };
+    insertar_(H.PROFES, [conColumna(p)]);
+    bitacora_(ses, 'crearProfe', H.PROFES, p.id, p);
+    return { id: p.id };
+  }
+  const p = t.filas.find(f => f.id === d.id);
+  if (!p) throw err_('No encontré el profe ' + d.id);
+  const cambios = {};
+  if (d.nombre !== undefined) {
+    const nombre = requerido_(d.nombre, 'nombre').replace(/\s+/g, ' ');
+    const otro = t.filas.find(f => f.id !== p.id && norm_(f.nombre) === norm_(nombre));
+    if (otro) throw err_('Ya existe otro profe con ese nombre.', 'duplicado');
+    if (nombre !== p.nombre) cambios.nombre = nombre;
+  }
+  if (d.valor_clase !== undefined && valor !== (p.valor_clase === '' ? '' : num_(p.valor_clase))) cambios.valor_clase = valor;
+  if (d.nota !== undefined && texto_(d.nota) !== String(p.nota || '')) cambios.nota = texto_(d.nota);
+  if (d.activo !== undefined && (norm_(p.activo) !== 'no') !== !!d.activo) cambios.activo = d.activo ? 'Sí' : 'No';
+  if (!Object.keys(cambios).length) throw err_('No hay cambios para guardar.');
+  const antes = {};
+  Object.keys(cambios).forEach(k => antes[k] = p[k]);
+  actualizar_(t, p, conColumna(Object.assign({}, cambios, { actualizado_por: ses.nombre, actualizado_en: new Date() })));
+  const renombrados = cambios.nombre ? renombrar_(H.PAGO_PROFES, p.id, cambios.nombre, 'profe_id', 'profe') : 0;
+  const accion = cambios.activo === 'No' ? 'eliminarProfe' : cambios.activo === 'Sí' ? 'reactivarProfe' : 'editarProfe';
+  bitacora_(ses, accion, H.PROFES, p.id, { antes: antes, despues: cambios, pagos_renombrados: renombrados });
+  return { id: p.id, renombrados: renombrados };
 }
 
 // ---------- productos e inventario

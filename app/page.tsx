@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { api, cuandoSeCierreSesion, entrar, ErrorApi, leerSesion, salir, type Sesion } from '@/lib/api';
 import type { Catalogos } from '@/lib/tipos';
 import { AppCtx, BarraCarga, ErrorCaja } from '@/components/ui';
-import { Cuenta, Estudiantes, Inventario } from '@/components/admin';
+import { Cuenta, Estudiantes, Inventario, Profes } from '@/components/admin';
 import { Gasto, PagoProfe, RegistrarPago, Traslado } from '@/components/registrar';
 import { Tienda } from '@/components/tienda';
 import { Uniformes } from '@/components/uniformes';
@@ -27,6 +27,7 @@ const VISTAS: Record<string, () => ReactNode> = {
   estudiantes: () => <Estudiantes />,
   inventario: () => <Inventario />,
   cuenta: () => <Cuenta />,
+  profes: () => <Profes />,
 };
 
 function leerHash() {
@@ -149,6 +150,7 @@ const REGISTRAR = [
 const ADMINISTRAR = [
   { v: 'estudiantes', i: '🎓', t: 'Estudiantes y planes', s: 'Agregar, editar y asignar plan' },
   { v: 'inventario', i: '📦', t: 'Inventario', s: 'Productos, entradas y conteos' },
+  { v: 'profes', i: '🩰', t: 'Profes', s: 'Crear, editar o eliminar' },
   { v: 'cuenta', i: '🔑', t: 'Mi cuenta', s: 'Cambiar clave y usuarios' },
 ];
 const CONSULTAR = [

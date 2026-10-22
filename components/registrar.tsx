@@ -191,6 +191,7 @@ export function PagoProfe() {
         <div className="acciones">
           <button className="btn" disabled={!profeId || !periodo || !total || ocupado} onClick={guardar}>{ocupado ? 'Guardando…' : `Guardar pago de ${pesos(total)}`}</button>
           <button className="btn secundario" onClick={() => ir('reporteProfes')}>Ver pagos a profes</button>
+          <button className="btn secundario" onClick={() => ir('profes')}>Agregar o editar profes</button>
         </div>
       </div>
     </Pantalla>

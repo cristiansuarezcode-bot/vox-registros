@@ -59,14 +59,14 @@ function ListaEstudiantes({ d, recargar }: { d: ListaEst; recargar: () => void }
       <div className="tarjeta">
         <p className="suave mt0" style={{ fontSize: 13 }}>{filas.length} estudiante(s)</p>
         {!filas.length ? <p className="vacio">Nadie con estos filtros.</p> : (
-          <div className="tabla-envoltura"><table className="tabla">
+          <div className="tabla-envoltura"><table className="tabla tarjetas">
             <thead><tr><th>Nombre</th><th>Plan</th><th>Estado</th><th></th></tr></thead>
             <tbody>{filas.map(e => (
               <tr key={e.id} className={e.activo ? '' : 'inactivo'}>
-                <td><button className="enlace" onClick={() => ir('ficha', { estudiante_id: e.id })}>{e.nombre}</button><br /><small className="suave">{e.id}</small></td>
-                <td>{e.plan || <span className="suave">Sin plan</span>}</td>
-                <td>{e.activo ? <span className="chip ok">Activo</span> : <span className="chip inactivo">Inactivo</span>}</td>
-                <td><button className="btn secundario chico" onClick={() => setEditar(e)}>Editar</button></td>
+                <td><button className="enlace" onClick={() => ir('ficha', { estudiante_id: e.id })}>{e.nombre}</button> {!e.activo && <span className="chip inactivo">Inactivo</span>}</td>
+                <td data-label="Plan">{e.plan || <span className="suave">Sin plan</span>}</td>
+                <td className="solo-escritorio">{e.activo ? <span className="chip ok">Activo</span> : <span className="chip inactivo">Inactivo</span>}</td>
+                <td className="acciones-fila"><button className="btn secundario chico" onClick={() => setEditar(e)}>Editar</button></td>
               </tr>))}
             </tbody>
           </table></div>
@@ -138,15 +138,15 @@ function Planes({ d, recargar }: { d: ListaEst; recargar: () => void }) {
       {sinValor > 0 && <p className="aviso info">{sinValor} plan(es) no tienen valor mensual. Con el valor, al registrar una mensualidad el monto sale solo.</p>}
       <div className="tarjeta">
         <div className="acciones mt0" style={{ marginTop: 0, marginBottom: 10 }}><button className="btn" onClick={() => setEditar('nuevo')}>+ Nuevo plan</button></div>
-        <div className="tabla-envoltura"><table className="tabla">
+        <div className="tabla-envoltura"><table className="tabla tarjetas">
           <thead><tr><th>Plan</th><th className="num">Valor mensual</th><th className="num">Estudiantes</th><th>Estado</th><th></th></tr></thead>
           <tbody>{d.planes.map(p => (
             <tr key={p.id} className={p.activo ? '' : 'inactivo'}>
-              <td><b>{p.nombre}</b>{p.nota && <><br /><small className="suave">{p.nota}</small></>}</td>
-              <td className="num">{p.valor_mensual ? pesos(p.valor_mensual) : <span className="chip debe">Sin valor</span>}</td>
-              <td className="num">{p.estudiantes}</td>
-              <td>{p.activo ? <span className="chip ok">Activo</span> : <span className="chip inactivo">Inactivo</span>}</td>
-              <td><button className="btn secundario chico" onClick={() => setEditar(p)}>Editar</button></td>
+              <td><b>{p.nombre}</b> {!p.activo && <span className="chip inactivo">Inactivo</span>}{p.nota && <><br /><small className="suave">{p.nota}</small></>}</td>
+              <td className="num" data-label="Valor mensual">{p.valor_mensual ? pesos(p.valor_mensual) : <span className="chip debe">Sin valor</span>}</td>
+              <td className="num" data-label="Estudiantes">{p.estudiantes}</td>
+              <td className="solo-escritorio">{p.activo ? <span className="chip ok">Activo</span> : <span className="chip inactivo">Inactivo</span>}</td>
+              <td className="acciones-fila"><button className="btn secundario chico" onClick={() => setEditar(p)}>Editar</button></td>
             </tr>))}
           </tbody>
         </table></div>
@@ -216,15 +216,15 @@ export function Inventario() {
             <button className="btn" onClick={() => setNuevo(true)}>+ Producto nuevo</button>
             <label style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 14 }}><input type="checkbox" checked={verInactivos} onChange={e => setVerInactivos(e.target.checked)} style={{ width: 18, height: 18 }} /> Ver productos inactivos</label>
           </div>
-          <div className="tabla-envoltura"><table className="tabla">
+          <div className="tabla-envoltura"><table className="tabla tarjetas">
             <thead><tr><th>Producto</th><th className="num">Precio</th><th className="num">Hay</th><th className="num">Vendidos ({fechaCorta(desde)} – {fechaCorta(hasta)})</th><th></th></tr></thead>
             <tbody>{productos.map(p => (
               <tr key={p.id} className={p.activo ? '' : 'inactivo'}>
                 <td><b>{p.nombre}</b>{!p.activo && <> <span className="chip inactivo">Inactivo</span></>}{p.ultimo_conteo && <><br /><small className="suave">Último conteo: {fechaCorta(p.ultimo_conteo)}</small></>}</td>
-                <td className="num">{pesos(p.precio)}</td>
-                <td className="num">{p.stock === null ? <span className="suave">Sin contar</span> : <span className={'chip ' + (p.stock <= 0 ? 'agotado' : p.stock <= 3 ? 'debe' : 'ok')}>{p.stock}</span>}</td>
-                <td className="num">{p.vendidas}{p.total_vendido ? <><br /><small className="suave">{pesos(p.total_vendido)}</small></> : null}</td>
-                <td style={{ whiteSpace: 'nowrap' }}>
+                <td className="num" data-label="Precio">{pesos(p.precio)}</td>
+                <td className="num" data-label="Hay">{p.stock === null ? <span className="suave">Sin contar</span> : <span className={'chip ' + (p.stock <= 0 ? 'agotado' : p.stock <= 3 ? 'debe' : 'ok')}>{p.stock}</span>}</td>
+                <td className="num" data-label="Vendidos">{p.vendidas}{p.total_vendido ? <small className="suave"> · {pesos(p.total_vendido)}</small> : null}</td>
+                <td className="acciones-fila" style={{ whiteSpace: 'nowrap' }}>
                   <button className="btn chico" onClick={() => setMov(p)}>Entrada / Contar</button>{' '}
                   <button className="btn secundario chico" onClick={() => setEditar(p)}>Editar</button>
                 </td>
@@ -425,6 +425,96 @@ function Restablecer({ u, onCerrar }: { u: Usuario; onCerrar: () => void }) {
         <input type="text" autoComplete="off" autoFocus value={nueva} onChange={e => setNueva(e.target.value)} />
       </Campo>
       <div className="acciones"><button className="btn" disabled={ocupado || nueva.length < 6} onClick={guardar}>{ocupado ? 'Guardando…' : 'Guardar clave'}</button><button className="btn secundario" onClick={onCerrar}>Cancelar</button></div>
+    </Modal>
+  );
+}
+
+// ================================================================== profes
+type ProfeFila = { id: string; nombre: string; valor_clase: number; activo: boolean; nota: string; total_pagado: number; clases: number; pagos: number; ultimo_pago: string };
+
+export function Profes() {
+  const { recargarCat, ir } = useApp();
+  const { d, error, cargando, recargar } = useDatos<{ profes: ProfeFila[] }>('listarProfes', {}, []);
+  const [ver, setVer] = useState<'Trabajando' | 'Eliminados' | 'Todos'>('Trabajando');
+  const [editar, setEditar] = useState<ProfeFila | 'nuevo' | null>(null);
+  const [eliminar, setEliminar] = useState<ProfeFila | null>(null);
+  const { ocupado, correr } = useAccion();
+  const filas = (d?.profes || []).filter(p => ver === 'Todos' || (ver === 'Trabajando') === p.activo);
+  const listo = async () => { setEditar(null); setEliminar(null); recargar(); await recargarCat(); };
+  const reactivar = async (p: ProfeFila) => { if (await correr('guardarProfe', { id: p.id, activo: true }, `${p.nombre} vuelve a estar en la lista`)) listo(); };
+  return (
+    <Pantalla titulo="Profes" sub="Quién da clases y cuánto se le paga. Eliminar a un profe no borra lo que se le ha pagado">
+      <div className="tarjeta">
+        <div className="rejilla">
+          <Campo label="Mostrar"><Segmentado opciones={['Trabajando', 'Eliminados', 'Todos'] as const} valor={ver} onChange={setVer} /></Campo>
+        </div>
+        <div className="acciones">
+          <button className="btn" onClick={() => setEditar('nuevo')}>+ Nuevo profe</button>
+          <button className="btn secundario" onClick={() => ir('profe')}>Registrar pago a profe</button>
+          <button className="btn secundario" onClick={() => ir('reporteProfes')}>Ver pagos</button>
+        </div>
+      </div>
+      {error && <ErrorCaja msg={error} reintentar={recargar} />}
+      {cargando && !d && <Cargando texto="Cargando profes…" />}
+      {d && <div className="tarjeta">
+        {!filas.length ? <p className="vacio">{ver === 'Eliminados' ? 'No hay profes eliminados.' : 'No hay profes.'}</p> : (
+          <div className="tabla-envoltura"><table className="tabla tarjetas">
+            <thead><tr><th>Profe</th><th className="num">Valor por clase</th><th className="num">Pagado en total</th><th>Último pago</th><th></th></tr></thead>
+            <tbody>{filas.map(p => (
+              <tr key={p.id} className={p.activo ? '' : 'inactivo'}>
+                <td><b>{p.nombre}</b>{!p.activo && <> <span className="chip inactivo">Eliminado</span></>}{p.nota && <><br /><small className="suave">{p.nota}</small></>}</td>
+                <td className="num" data-label="Valor por clase">{p.valor_clase ? pesos(p.valor_clase) : <span className="suave">Variable</span>}</td>
+                <td className="num" data-label="Pagado en total">{p.pagos ? <>{pesos(p.total_pagado)} <small className="suave">· {p.clases} clases, {p.pagos} pago(s)</small></> : <span className="suave">Sin pagos registrados</span>}</td>
+                <td data-label="Último pago">{p.ultimo_pago ? fechaCorta(p.ultimo_pago) : <span className="suave">—</span>}</td>
+                <td className="acciones-fila" style={{ whiteSpace: 'nowrap' }}>
+                  <button className="btn secundario chico" onClick={() => setEditar(p)}>Editar</button>{' '}
+                  {p.activo
+                    ? <button className="btn secundario chico" onClick={() => setEliminar(p)}>Eliminar</button>
+                    : <button className="btn chico" disabled={ocupado} onClick={() => reactivar(p)}>Reactivar</button>}
+                </td>
+              </tr>))}
+            </tbody>
+          </table></div>
+        )}
+      </div>}
+      {editar && <EditarProfe p={editar === 'nuevo' ? null : editar} onCerrar={() => setEditar(null)} onListo={listo} />}
+      {eliminar && <EliminarProfe p={eliminar} onCerrar={() => setEliminar(null)} onListo={listo} />}
+    </Pantalla>
+  );
+}
+
+function EditarProfe({ p, onCerrar, onListo }: { p: ProfeFila | null; onCerrar: () => void; onListo: () => void }) {
+  const [nombre, setNombre] = useState(p?.nombre || '');
+  const [valor, setValor] = useState(p?.valor_clase || 0);
+  const [nota, setNota] = useState(p?.nota || '');
+  const { ocupado, correr } = useAccion();
+  const guardar = async () => {
+    const datos: Record<string, unknown> = p ? { id: p.id } : {};
+    if (!p || nombre.trim() !== p.nombre) datos.nombre = nombre;
+    if (!p || valor !== p.valor_clase) datos.valor_clase = valor || '';
+    if (!p || nota.trim() !== p.nota) datos.nota = nota;
+    if (await correr('guardarProfe', datos, p ? 'Profe actualizado' : `${nombre.trim()} agregado`)) onListo();
+  };
+  return (
+    <Modal titulo={p ? 'Editar profe' : 'Nuevo profe'} onCerrar={onCerrar}>
+      <div className="rejilla">
+        <Campo label="Nombre" ancho ayuda={p && p.pagos ? 'Si lo corriges, también se corrige en sus pagos.' : undefined}><input autoFocus value={nombre} onChange={e => setNombre(e.target.value)} /></Campo>
+        <Campo label="Valor por clase" ayuda="Déjalo vacío si cambia según la clase. Igual se puede cambiar en cada pago."><Monto valor={valor} onChange={setValor} placeholder="Variable" /></Campo>
+        <Campo label="Nota (opcional)"><input value={nota} onChange={e => setNota(e.target.value)} placeholder="Ej: urbano, miércoles y sábados" /></Campo>
+      </div>
+      <div className="acciones"><button className="btn" disabled={ocupado || !nombre.trim()} onClick={guardar}>{ocupado ? 'Guardando…' : 'Guardar'}</button><button className="btn secundario" onClick={onCerrar}>Cancelar</button></div>
+    </Modal>
+  );
+}
+
+function EliminarProfe({ p, onCerrar, onListo }: { p: ProfeFila; onCerrar: () => void; onListo: () => void }) {
+  const { ocupado, correr } = useAccion();
+  const confirmar = async () => { if (await correr('guardarProfe', { id: p.id, activo: false }, `${p.nombre} eliminado de la lista`)) onListo(); };
+  return (
+    <Modal titulo={`Eliminar a ${p.nombre}`} onCerrar={onCerrar}>
+      <p style={{ fontSize: 15 }}>Deja de aparecer para registrar pagos nuevos.</p>
+      <p className="aviso ok">{p.pagos ? <>Su historial no se pierde: {p.pagos === 1 ? 'el pago' : `los ${p.pagos} pagos`} por <b>{pesos(p.total_pagado)}</b> {p.pagos === 1 ? 'sigue' : 'siguen'} en los reportes.</> : 'No tiene pagos registrados.'} Si vuelve a trabajar, lo puedes reactivar desde “Eliminados”.</p>
+      <div className="acciones"><button className="btn peligro" disabled={ocupado} onClick={confirmar}>{ocupado ? 'Eliminando…' : 'Eliminar'}</button><button className="btn secundario" onClick={onCerrar}>Cancelar</button></div>
     </Modal>
   );
 }
