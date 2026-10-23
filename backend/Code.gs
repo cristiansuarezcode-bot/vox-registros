@@ -16,7 +16,7 @@
 // Hoja de cálculo que sirve de base de datos (Registros Vox Corpus Danza, cuenta voxcorpusdanza@gmail.com).
 const HOJA_ID = '1XWxLoazHg4dCTqvaM0E2ZQYFzcL0XjNFcp_xQ4B51p0';
 const TZ = 'America/Bogota';
-const VERSION = '1.4.1';
+const VERSION = '1.4.2';
 const SESION_SEG = 6 * 60 * 60;          // máximo que permite CacheService
 const INTENTOS_MAX = 5;                  // claves erradas antes de bloquear
 const BLOQUEO_SEG = 15 * 60;
@@ -72,6 +72,7 @@ function doGet() {
 }
 
 function doPost(e) {
+  nuevaLectura_();
   let body;
   try {
     body = JSON.parse((e && e.postData && e.postData.contents) || '{}');
@@ -623,7 +624,7 @@ function renombrar_(hoja, estudianteId, nombre, colId, colNombre) {
   const nombres = col.getValues();
   let c = 0;
   ids.forEach((r, i) => { if (r[0] === estudianteId && nombres[i][0] !== nombre) { nombres[i][0] = nombre; c++; } });
-  if (c) col.setValues(nombres);
+  if (c) { col.setValues(nombres); olvidar_(hoja); }
   return c;
 }
 
@@ -1255,7 +1256,19 @@ function hoja_(nombre) {
   return sh;
 }
 
+// Lecturas de pestañas ya hechas en esta ejecución: cada pestaña se lee una sola vez por consulta.
+// Las filas son los mismos objetos que modifica actualizar_, así que siguen al día; insertar_ y las
+// demás escrituras directas borran la copia de esa pestaña para que la próxima lectura sea fresca.
+let TABLAS_ = {};
+function nuevaLectura_() { TABLAS_ = {}; }
+function olvidar_(nombre) { delete TABLAS_[nombre]; }
+
 function tabla_(nombre) {
+  const t = TABLAS_[nombre] || (TABLAS_[nombre] = leerTabla_(nombre));
+  return { sh: t.sh, headers: t.headers, filas: t.filas.slice() };
+}
+
+function leerTabla_(nombre) {
   const sh = hoja_(nombre);
   const values = sh.getDataRange().getValues();
   const headers = (values[0] || []).map(h => String(h).trim());
@@ -1278,6 +1291,7 @@ function insertar_(nombre, objs) {
   if (faltan.length) throw err_('A la pestaña "' + nombre + '" le faltan columnas: ' + faltan.join(', ') + '. Ejecuta "Configurar" desde el menú Vox.');
   const rows = objs.map(o => headers.map(h => o[h] === undefined || o[h] === null ? '' : o[h]));
   sh.getRange(sh.getLastRow() + 1, 1, rows.length, headers.length).setValues(rows);
+  olvidar_(nombre);
 }
 
 function actualizar_(t, fila, cambios) {
@@ -1311,6 +1325,7 @@ function bitacora_(ses, accion, hoja, id, detalle) {
   let txt = JSON.stringify(detalle, (k, v) => (k === '_fila' ? undefined : v));
   if (txt.length > 2000) txt = txt.slice(0, 2000) + '…';
   sh.appendRow([new Date(), ses.nombre, accion, hoja, id, txt]);
+  olvidar_(H.BITACORA);
 }
 
 // ===================================================================== utilidades
@@ -1357,6 +1372,7 @@ function onOpen() {
 
 /** Prepara la hoja: zona horaria, columnas que falten, Bitácora y la "sal" para cifrar claves. */
 function configurar() {
+  nuevaLectura_();
   const ss = libro_();
   ss.setSpreadsheetTimeZone(TZ);
   Object.keys(COLUMNAS_EXTRA).forEach(nombre => {
@@ -1393,6 +1409,7 @@ function configurar() {
     b.setFrozenRows(1);
     b.getRange('A:A').setNumberFormat('dd/mm/yyyy hh:mm');
   }
+  nuevaLectura_();
   const props = PropertiesService.getScriptProperties();
   if (!props.getProperty('SAL')) props.setProperty('SAL', Utilities.getUuid() + Utilities.getUuid());
   try { SpreadsheetApp.getUi().alert('Listo. Ahora asigna las claves desde Vox → Asignar o cambiar clave.'); } catch (x) { /* sin interfaz */ }
@@ -1408,6 +1425,7 @@ function asignarClave() {
 }
 
 function fijarClave_(usuario, clave) {
+  nuevaLectura_();
   clave = String(clave || '');
   if (clave.length < 6) return 'La clave debe tener mínimo 6 caracteres. No se guardó.';
   const t = tabla_(H.USUARIOS);
@@ -1425,6 +1443,7 @@ function fijarClave_(usuario, clave) {
  * La clave se cifra en "clave_hash" y la celda de "clave_nueva" queda vacía.
  */
 function aplicarClavesNuevas() {
+  nuevaLectura_();
   const t = tabla_(H.USUARIOS);
   const res = [];
   t.filas.forEach(u => {
@@ -1454,6 +1473,7 @@ function cerrarSesiones() {
  * Ejecutar desde el editor de Apps Script → función correccionesRevision22oct.
  */
 function correccionesRevision22oct() {
+  nuevaLectura_();
   const ses = { nombre: 'Revisión recepción 22/10' };
   if (tabla_(H.BITACORA).filas.some(x => x.accion === 'correcciones_22oct')) { console.log('Ya se habían aplicado.'); return 'Ya se habían aplicado.'; }
   const res = [];
@@ -1620,6 +1640,7 @@ function proponerEmparejamiento_(admin) {
 
 /** Paso 1 (editor): arma la pestaña "Emparejar admin" para revisarla. No cambia estudiantes. */
 function revisarEmparejamiento() {
+  nuevaLectura_();
   const admin = leerAdmin_();
   const filas = proponerEmparejamiento_(admin);
   const orden = { 'Parecido': 0, 'Nuevo': 1, 'Solo en planilla': 2, 'Igual': 3, 'Ya vinculado': 4 };
@@ -1630,6 +1651,7 @@ function revisarEmparejamiento() {
   sh.getRange(1, 1, 1, EMPAREJAR_COLS.length).setValues([EMPAREJAR_COLS]).setFontWeight('bold').setFontColor('#FFFFFF').setBackground('#1F1229');
   sh.setFrozenRows(1);
   if (filas.length) sh.getRange(2, 1, filas.length, EMPAREJAR_COLS.length).setValues(filas);
+  olvidar_(HOJA_EMPAREJAR);
   const cuenta = {}; filas.forEach(r => cuenta[r[4]] = (cuenta[r[4]] || 0) + 1);
   const msg = 'Admin: ' + admin.estudiantes.length + ' estudiantes, ' + admin.planes.length + ' planes.\n' +
     Object.keys(orden).filter(k => cuenta[k]).map(k => k + ': ' + cuenta[k]).join('\n') +
@@ -1640,6 +1662,7 @@ function revisarEmparejamiento() {
 
 /** Paso 3 (editor): une lo confirmado en "Emparejar admin" y deja la planilla conectada al admin. */
 function aplicarEmparejamiento() {
+  nuevaLectura_();
   const lock = LockService.getScriptLock();
   if (!lock.tryLock(30000)) throw err_('Hay alguien guardando. Intenta en un momento.');
   try {
@@ -1772,6 +1795,7 @@ function estadoAdmin_() {
 
 /** Lo ejecuta el activador cada 15 minutos. Si alguien está guardando, espera a la próxima vuelta. */
 function sincronizarAdminAuto() {
+  nuevaLectura_();
   if (!adminConectado_()) return;
   const lock = LockService.getScriptLock();
   if (!lock.tryLock(5000)) return;

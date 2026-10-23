@@ -1,6 +1,6 @@
 'use client';
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import { api, cuandoSeCierreSesion, entrar, ErrorApi, leerSesion, salir, type Sesion } from '@/lib/api';
+import { api, cuandoSeCierreSesion, entrar, ErrorApi, guardarCatalogo, leerCatalogo, leerSesion, salir, type Sesion } from '@/lib/api';
 import type { Catalogos } from '@/lib/tipos';
 import { AppCtx, BarraCarga, ErrorCaja } from '@/components/ui';
 import { Cuenta, Descuentos, Estudiantes, Inventario, Profes } from '@/components/admin';
@@ -84,16 +84,17 @@ function Login({ onEntrar }: { onEntrar: (s: Sesion) => void }) {
 }
 
 function App({ sesion, onSalir }: { sesion: Sesion; onSalir: () => void }) {
-  const [cat, setCat] = useState<Catalogos | null>(null);
+  // Se muestra de una vez la copia guardada y se actualiza por detrás.
+  const [cat, setCat] = useState<Catalogos | null>(() => leerCatalogo<Catalogos>(sesion.nombre));
   const [errorCat, setErrorCat] = useState('');
   const [ruta, setRuta] = useState(leerHash);
   const [toast, setToast] = useState<{ msg: string; tipo: 'ok' | 'error' } | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const recargarCat = useCallback(async () => {
-    try { setCat(await api<Catalogos>('catalogos')); setErrorCat(''); }
+    try { const c = await api<Catalogos>('catalogos'); setCat(c); setErrorCat(''); guardarCatalogo(sesion.nombre, c); }
     catch (e) { setErrorCat(e instanceof ErrorApi ? e.message : 'No se pudieron cargar las listas'); }
-  }, []);
+  }, [sesion.nombre]);
   useEffect(() => { recargarCat(); }, [recargarCat]);
 
   useEffect(() => {
@@ -127,7 +128,8 @@ function App({ sesion, onSalir }: { sesion: Sesion; onSalir: () => void }) {
         </div>
       </header>
       <main className="contenedor">
-        {errorCat && <ErrorCaja msg={errorCat} reintentar={recargarCat} />}
+        {errorCat && !cat && <ErrorCaja msg={errorCat} reintentar={recargarCat} />}
+        {errorCat && cat && <p className="aviso info" style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>No se pudieron actualizar las listas: estás viendo las de la última vez. <button className="enlace" onClick={recargarCat}>Reintentar</button></p>}
         {!cat && !errorCat && <div className="portada"><div><span className="girando" /><span>Cargando estudiantes, productos y cuentas…</span></div></div>}
         {cat && (
           <AppCtx.Provider value={{ cat, recargarCat, aviso, ir, params: ruta.params }}>

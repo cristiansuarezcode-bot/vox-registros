@@ -3,6 +3,7 @@
 
 export const API_URL = process.env.NEXT_PUBLIC_API_URL || '';
 const LLAVE_SESION = 'vox-registros-sesion';
+const LLAVE_CATALOGO = 'vox-registros-catalogo';
 
 export type Sesion = { token: string; nombre: string; rol: string };
 
@@ -31,13 +32,37 @@ export function leerSesion(): Sesion | null {
 function guardarSesion(s: Sesion | null) {
   try {
     if (s) localStorage.setItem(LLAVE_SESION, JSON.stringify(s));
-    else localStorage.removeItem(LLAVE_SESION);
+    else { localStorage.removeItem(LLAVE_SESION); localStorage.removeItem(LLAVE_CATALOGO); }
   } catch {
     /* el navegador no deja guardar: la sesión dura mientras la pestaña esté abierta */
   }
 }
 
 let sesionMemoria: Sesion | null = null;
+
+/*
+ * Copia de las listas (estudiantes, productos, planes…) para abrir la página al instante.
+ * Solo sirve para mostrar: al guardar, Apps Script revisa todo con los datos reales.
+ * Es de cada usuario y se borra al salir o cuando termina la sesión.
+ */
+export function leerCatalogo<T>(usuario: string): T | null {
+  try {
+    const raw = localStorage.getItem(LLAVE_CATALOGO);
+    if (!raw) return null;
+    const c = JSON.parse(raw) as { usuario: string; cat: T };
+    return c.usuario === usuario ? c.cat : null;
+  } catch {
+    return null;
+  }
+}
+export function guardarCatalogo(usuario: string, cat: unknown) {
+  try {
+    // Si la sesión ya se cerró (una actualización que llegó tarde), no se guarda nada.
+    const s = leerSesion();
+    if (!s || s.nombre !== usuario) return;
+    localStorage.setItem(LLAVE_CATALOGO, JSON.stringify({ usuario, guardado: Date.now(), cat }));
+  } catch { /* sin espacio o bloqueado: no pasa nada */ }
+}
 
 // Cuántas consultas van en camino: la página muestra una barra de carga mientras sea mayor que cero.
 let pendientes = 0;
