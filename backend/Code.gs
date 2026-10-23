@@ -16,7 +16,7 @@
 // Hoja de cálculo que sirve de base de datos (Registros Vox Corpus Danza, cuenta voxcorpusdanza@gmail.com).
 const HOJA_ID = '1XWxLoazHg4dCTqvaM0E2ZQYFzcL0XjNFcp_xQ4B51p0';
 const TZ = 'America/Bogota';
-const VERSION = '1.4.0';
+const VERSION = '1.4.1';
 const SESION_SEG = 6 * 60 * 60;          // máximo que permite CacheService
 const INTENTOS_MAX = 5;                  // claves erradas antes de bloquear
 const BLOQUEO_SEG = 15 * 60;
@@ -29,6 +29,7 @@ const H = {
   INVENTARIO: 'Inventario', PLANES: 'Planes', DESCUENTOS: 'Descuentos',
 };
 const SALDO_FAVOR = 'Saldo a favor';
+const CAMBIO_NO_DEVUELTO = 'Cambio no devuelto';
 
 // Pestañas que configurar() crea si no existen.
 const HOJAS_NUEVAS = {
@@ -359,10 +360,33 @@ function registrarVenta_(d, ses) {
       pagos = [p].concat(consumirSaldo_(q, resto, { concepto: 'Cuenta tienda', pedido: '' }, fecha, ses, 'Usado en la tienda (' + venta + ')', numeroId_(pid) + 1, venta));
     }
   }
+  // Efectivo: si no se devolvió el cambio, esa plata también entró a la caja y se registra.
+  //  - destino "caja": queda como una línea "Cambio no devuelto" de la misma venta.
+  //  - destino "favor": queda como saldo a favor en la tienda de esa persona (un abono a "Cuenta tienda" ligado a la venta).
+  let cambio = null;
+  if (d.cambio && num_(d.cambio.valor)) {
+    if (norm_(metodo) !== 'efectivo') throw err_('El cambio solo aplica cuando pagan en efectivo.');
+    const v = monto_(d.cambio.valor);
+    if (v > 200000) throw err_('Ese cambio es muy alto. Revisa con cuánto pagó.');
+    const destino = norm_(d.cambio.destino);
+    if (destino === 'caja') {
+      filas.push(auditar_({ id: 'V' + pad_(n++, 4), venta: venta, fecha: fecha, producto_id: '', producto: CAMBIO_NO_DEVUELTO,
+        cantidad: 1, precio: v, total: v, metodo: metodo, recibido_en: recibido, estudiante_id: '', estudiante: '', persona: '',
+        nota: 'No quiso el cambio' }, ses));
+      cambio = { valor: v, destino: 'caja' };
+    } else if (destino === 'favor') {
+      const qc = quien_(d.cambio);
+      const pid = siguienteId_(H.PAGOS, 'id', 'P', 4);
+      pagos.push(auditar_({ id: pid, fecha: fecha, estudiante_id: qc.estudiante_id, estudiante: qc.estudiante, persona: qc.persona,
+        concepto: concepto_('Cuenta tienda').nombre, valor: v, metodo: 'Efectivo', recibido_en: recibido, pedido_uniforme: '',
+        nota: 'Cambio de la compra ' + venta + ' que quedó a favor', tipo: 'Cambio a favor', relacionado: venta }, ses));
+      cambio = { valor: v, destino: 'favor', quien: qc.estudiante || qc.persona };
+    } else throw err_('¿Qué se hizo con el cambio? Escoge "no quiso el cambio" o "dejar a favor".');
+  }
   insertar_(H.VENTAS, filas);
   if (pagos.length) insertar_(H.PAGOS, pagos);
-  bitacora_(ses, 'registrarVenta', H.VENTAS, venta, { metodo: metodo, total: total, lineas: filas.length, quien: q.estudiante || q.persona, pagos_saldo: pagos.map(p => p.id) });
-  return { venta: venta, total: total, lineas: filas.length };
+  bitacora_(ses, 'registrarVenta', H.VENTAS, venta, { metodo: metodo, total: total, lineas: filas.length, quien: q.estudiante || q.persona, pagos_saldo: pagos.map(p => p.id), cambio: cambio });
+  return { venta: venta, total: total, lineas: filas.length, cambio: cambio };
 }
 
 function crearPedido_(d, ses) {
@@ -506,7 +530,13 @@ function anular_(d, ses) {
     const tp = tabla_(H.PAGOS);
     const ligados = tp.filas.filter(p => esValido_(p) && p.relacionado && p.relacionado === d.id);
     ligados.forEach(p => actualizar_(tp, p, { estado: 'anulado', motivo_anulacion: 'Se anuló ' + d.id + ': ' + motivo, anulado_por: ses.nombre, anulado_en: ahora }));
-    if (ligados.length) avisos.push('El saldo a favor que se había usado vuelve a quedar disponible.');
+    if (ligados.some(p => p.tipo !== 'Cambio a favor')) avisos.push('El saldo a favor que se había usado vuelve a quedar disponible.');
+    ligados.filter(p => p.tipo === 'Cambio a favor').forEach(p => {
+      const q = { estudiante_id: p.estudiante_id, persona: p.persona };
+      const t = saldosDe_(q).items.find(i => i.origen === 'tienda');
+      avisos.push('Se quitó el cambio de ' + pesos_(p.valor) + ' que había quedado a favor de ' + (p.estudiante || p.persona) + '.' +
+        (t && t.saldo > 0 ? ' Ya había usado parte: ahora debe ' + pesos_(t.saldo) + ' en la tienda.' : ''));
+    });
   }
   if (hoja === H.PEDIDOS) {
     const pagosVivos = tabla_(H.PAGOS).filas.filter(p => p.pedido_uniforme === d.id && esValido_(p));

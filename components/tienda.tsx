@@ -18,6 +18,8 @@ export function Tienda() {
   const [filtro, setFiltro] = useState('');
   const [clave, setClave] = useState(0);
   const [recibido, setRecibido] = useState(0);
+  const [destinoCambio, setDestinoCambio] = useState<'Se le devolvió' | 'No quiso el cambio' | 'Dejárselo a favor'>('Se le devolvió');
+  const [quienCambio, setQuienCambio] = useState<Quien>(null);
 
   const lineas = useMemo(() => cat.productos.filter(p => carrito[p.id]).map(p => ({ ...p, cantidad: carrito[p.id] })), [carrito, cat.productos]);
   const total = lineas.reduce((s, l) => s + l.cantidad * l.precio, 0);
@@ -33,19 +35,23 @@ export function Tienda() {
     return [...new Set(xs)].sort((a, b) => a - b).slice(0, 4);
   }, [total]);
   const devolver = recibido - total;
+  const sobra = efectivo && devolver > 0 ? devolver : 0;
+  const cambioPendiente = sobra > 0 && destinoCambio !== 'Se le devolvió';
   const conSaldo = m === 'saldo a favor';
   const favor = useSaldoFavor(conSaldo ? quien : null);
   const listo = lineas.length && (m !== 'fiado' || quien) && (m !== 'consumo interno' || interno) && (m !== 'transferencia' || cuenta)
-    && (!conSaldo || (quien && !favor.cargando && total <= favor.a_favor));
+    && (!conSaldo || (quien && !favor.cargando && total <= favor.a_favor))
+    && (!(cambioPendiente && destinoCambio === 'Dejárselo a favor') || quienCambio);
   const guardar = async () => {
     const datos: Record<string, unknown> = { fecha, metodo, lineas: lineas.map(l => ({ producto_id: l.id, cantidad: l.cantidad })) };
     if (m === 'transferencia') datos.recibido_en = cuenta;
     if (m === 'fiado' || conSaldo) Object.assign(datos, datosQuien(quien));
     if (m === 'consumo interno') datos.persona = interno;
+    if (cambioPendiente) datos.cambio = destinoCambio === 'No quiso el cambio' ? { valor: sobra, destino: 'caja' } : { valor: sobra, destino: 'favor', ...datosQuien(quienCambio) };
     const r = await correr<{ venta: string; total: number }>('registrarVenta', datos);
     if (r) {
-      aviso(`Venta ${r.venta} guardada: ${pesos(r.total)}${m === 'fiado' ? ' fiado a ' + quien?.nombre : conSaldo ? ' con el saldo a favor de ' + quien?.nombre : ''}${efectivo && devolver > 0 ? ` · devolver ${pesos(devolver)}` : ''}`);
-      setCarrito({}); setRecibido(0); setQuien(null); setInterno(''); setMetodo('Efectivo'); setClave(k => k + 1);
+      aviso(`Venta ${r.venta} guardada: ${pesos(r.total)}${m === 'fiado' ? ' fiado a ' + quien?.nombre : conSaldo ? ' con el saldo a favor de ' + quien?.nombre : ''}${!sobra ? '' : destinoCambio === 'No quiso el cambio' ? ` · ${pesos(sobra)} de cambio quedan en la caja` : destinoCambio === 'Dejárselo a favor' ? ` · ${pesos(sobra)} quedan a favor de ${quienCambio?.nombre}` : ` · devolver ${pesos(sobra)}`}`);
+      setCarrito({}); setRecibido(0); setDestinoCambio('Se le devolvió'); setQuienCambio(null); setQuien(null); setInterno(''); setMetodo('Efectivo'); setClave(k => k + 1);
       if (lineas.some(l => typeof l.stock === 'number')) recargarCat();
     }
   };
@@ -101,8 +107,20 @@ export function Tienda() {
                 {billetes.map(b => <button type="button" key={b} className={'btn secundario chico' + (recibido === b ? ' activo' : '')} onClick={() => setRecibido(b)}>{pesos(b)}</button>)}
               </div>
               {recibido > 0 && (devolver >= 0
-                ? <div className="cambio"><span>{devolver ? 'Devolver' : 'Sin cambio'}</span><b>{pesos(devolver)}</b></div>
+                ? <div className={'cambio' + (cambioPendiente ? ' guardado' : '')}><span>{!devolver ? 'Sin cambio' : cambioPendiente ? 'Cambio que se queda' : 'Devolver'}</span><b>{pesos(devolver)}</b></div>
                 : <div className="cambio falta"><span>Faltan</span><b>{pesos(-devolver)}</b></div>)}
+              {sobra > 0 && (
+                <div style={{ marginTop: 10 }}>
+                  <Campo label="¿Qué pasó con el cambio?">
+                    <Segmentado opciones={['Se le devolvió', 'No quiso el cambio', 'Dejárselo a favor'] as const} valor={destinoCambio} onChange={setDestinoCambio} />
+                  </Campo>
+                  {destinoCambio === 'No quiso el cambio' && <p className="ayuda" style={{ margin: '6px 0 0' }}>Los {pesos(sobra)} quedan registrados en la caja como “Cambio no devuelto”, para que el cierre cuadre.</p>}
+                  {destinoCambio === 'Dejárselo a favor' && <div style={{ marginTop: 8 }} key={'c' + clave}>
+                    <BuscarQuien valor={quienCambio} onChange={setQuienCambio} etiqueta="¿A favor de quién?" />
+                    <p className="ayuda" style={{ margin: '6px 0 0' }}>La plata queda en la caja y {quienCambio ? quienCambio.nombre : 'esa persona'} la puede usar en su próxima compra con “Saldo a favor”.</p>
+                  </div>}
+                </div>
+              )}
             </div>
           )}
           {m === 'transferencia' && <div style={{ marginTop: 10 }}><Campo label="¿A qué cuenta?"><Segmentado opciones={cuentasBanco(cat).filter(c => c !== 'Caja')} valor={cuenta} onChange={setCuenta} /></Campo></div>}
@@ -117,7 +135,7 @@ export function Tienda() {
           <div style={{ marginTop: 10 }}><Campo label="Fecha"><input type="date" value={fecha} max={hoy()} onChange={e => setFecha(e.target.value)} /></Campo></div>
           <div className="acciones">
             <button className="btn" style={{ flex: 1 }} disabled={!listo || ocupado} onClick={guardar}>{ocupado ? 'Guardando…' : `Guardar venta de ${pesos(total)}`}</button>
-            {lineas.length > 0 && <button className="btn secundario" onClick={() => { setCarrito({}); setRecibido(0); }}>Vaciar</button>}
+            {lineas.length > 0 && <button className="btn secundario" onClick={() => { setCarrito({}); setRecibido(0); setDestinoCambio('Se le devolvió'); setQuienCambio(null); }}>Vaciar</button>}
           </div>
         </div>
       </div>
