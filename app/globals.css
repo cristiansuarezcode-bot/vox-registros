@@ -224,6 +224,8 @@ table.tabla { width: 100%; border-collapse: collapse; font-size: 14px; }
 .cambio b { font-size: 28px; font-family: var(--titular); font-variant-numeric: tabular-nums; }
 .cambio.falta { background: #fdecec; color: #8a1c1c; }
 .cambio.guardado { background: #eef1f8; color: #1e3a6e; }
+.fila-tres .segmentado { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.fila-tres .segmentado button { padding: 8px 6px; font-size: 14px; line-height: 1.2; white-space: normal; min-height: 52px; }
 .caja-efectivo .ayuda { display: block; font-size: 13px; color: var(--suave); }
 
 .dos-columnas { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: 14px; align-items: start; }

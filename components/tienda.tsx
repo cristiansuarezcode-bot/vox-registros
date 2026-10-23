@@ -110,7 +110,7 @@ export function Tienda() {
                 ? <div className={'cambio' + (cambioPendiente ? ' guardado' : '')}><span>{!devolver ? 'Sin cambio' : cambioPendiente ? 'Cambio que se queda' : 'Devolver'}</span><b>{pesos(devolver)}</b></div>
                 : <div className="cambio falta"><span>Faltan</span><b>{pesos(-devolver)}</b></div>)}
               {sobra > 0 && (
-                <div style={{ marginTop: 10 }}>
+                <div style={{ marginTop: 10 }} className="fila-tres">
                   <Campo label="¿Qué pasó con el cambio?">
                     <Segmentado opciones={['Se le devolvió', 'No quiso el cambio', 'Dejárselo a favor'] as const} valor={destinoCambio} onChange={setDestinoCambio} />
                   </Campo>
