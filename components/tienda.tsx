@@ -2,7 +2,7 @@
 import { useMemo, useState } from 'react';
 import type { Quien } from '@/lib/tipos';
 import { hoy, norm, pesos } from '@/lib/util';
-import { BuscarQuien, Campo, Pantalla, Segmentado, cuentasBanco, datosQuien, useAccion, useApp, useSaldoFavor } from './ui';
+import { BuscarQuien, Campo, Monto, Pantalla, Segmentado, cuentasBanco, datosQuien, useAccion, useApp, useSaldoFavor } from './ui';
 
 export function Tienda() {
   const { cat, aviso, ir, recargarCat } = useApp();
@@ -17,6 +17,7 @@ export function Tienda() {
   const [fecha, setFecha] = useState(hoy());
   const [filtro, setFiltro] = useState('');
   const [clave, setClave] = useState(0);
+  const [recibido, setRecibido] = useState(0);
 
   const lineas = useMemo(() => cat.productos.filter(p => carrito[p.id]).map(p => ({ ...p, cantidad: carrito[p.id] })), [carrito, cat.productos]);
   const total = lineas.reduce((s, l) => s + l.cantidad * l.precio, 0);
@@ -24,6 +25,14 @@ export function Tienda() {
   const sumar = (id: string, d: number) => setCarrito(c => { const n = Math.max(0, (c[id] || 0) + d); const x = { ...c }; if (n) x[id] = n; else delete x[id]; return x; });
 
   const m = norm(metodo);
+  const efectivo = m === 'efectivo';
+  // Billetes con los que probablemente pague: el siguiente múltiplo de cada denominación, sin repetir.
+  const billetes = useMemo(() => {
+    if (!total) return [];
+    const xs = [1000, 2000, 5000, 10000, 20000, 50000, 100000].map(d => Math.ceil(total / d) * d).filter(v => v > total);
+    return [...new Set(xs)].sort((a, b) => a - b).slice(0, 4);
+  }, [total]);
+  const devolver = recibido - total;
   const conSaldo = m === 'saldo a favor';
   const favor = useSaldoFavor(conSaldo ? quien : null);
   const listo = lineas.length && (m !== 'fiado' || quien) && (m !== 'consumo interno' || interno) && (m !== 'transferencia' || cuenta)
@@ -35,8 +44,8 @@ export function Tienda() {
     if (m === 'consumo interno') datos.persona = interno;
     const r = await correr<{ venta: string; total: number }>('registrarVenta', datos);
     if (r) {
-      aviso(`Venta ${r.venta} guardada: ${pesos(r.total)}${m === 'fiado' ? ' fiado a ' + quien?.nombre : conSaldo ? ' con el saldo a favor de ' + quien?.nombre : ''}`);
-      setCarrito({}); setQuien(null); setInterno(''); setMetodo('Efectivo'); setClave(k => k + 1);
+      aviso(`Venta ${r.venta} guardada: ${pesos(r.total)}${m === 'fiado' ? ' fiado a ' + quien?.nombre : conSaldo ? ' con el saldo a favor de ' + quien?.nombre : ''}${efectivo && devolver > 0 ? ` · devolver ${pesos(devolver)}` : ''}`);
+      setCarrito({}); setRecibido(0); setQuien(null); setInterno(''); setMetodo('Efectivo'); setClave(k => k + 1);
       if (lineas.some(l => typeof l.stock === 'number')) recargarCat();
     }
   };
@@ -82,6 +91,20 @@ export function Tienda() {
           <div className="total-grande"><span>Total</span><b>{pesos(total)}</b></div>
           <div className="separador" />
           <Campo label="¿Cómo pagó?"><Segmentado opciones={metodos} valor={metodo} onChange={setMetodo} /></Campo>
+          {efectivo && total > 0 && (
+            <div className="caja-efectivo">
+              <Campo label="¿Con cuánto pagó?">
+                <Monto valor={recibido} onChange={setRecibido} placeholder="Escribe lo que te entregó" />
+              </Campo>
+              <div className="chips" style={{ marginTop: 6 }}>
+                <button type="button" className={'btn secundario chico' + (recibido === total ? ' activo' : '')} onClick={() => setRecibido(total)}>Exacto</button>
+                {billetes.map(b => <button type="button" key={b} className={'btn secundario chico' + (recibido === b ? ' activo' : '')} onClick={() => setRecibido(b)}>{pesos(b)}</button>)}
+              </div>
+              {recibido > 0 && (devolver >= 0
+                ? <div className="cambio"><span>{devolver ? 'Devolver' : 'Sin cambio'}</span><b>{pesos(devolver)}</b></div>
+                : <div className="cambio falta"><span>Faltan</span><b>{pesos(-devolver)}</b></div>)}
+            </div>
+          )}
           {m === 'transferencia' && <div style={{ marginTop: 10 }}><Campo label="¿A qué cuenta?"><Segmentado opciones={cuentasBanco(cat).filter(c => c !== 'Caja')} valor={cuenta} onChange={setCuenta} /></Campo></div>}
           {m === 'fiado' && <div style={{ marginTop: 10 }} key={clave}><BuscarQuien valor={quien} onChange={setQuien} etiqueta="¿A quién se le fía?" /></div>}
           {conSaldo && <div style={{ marginTop: 10 }} key={'s' + clave}>
@@ -94,7 +117,7 @@ export function Tienda() {
           <div style={{ marginTop: 10 }}><Campo label="Fecha"><input type="date" value={fecha} max={hoy()} onChange={e => setFecha(e.target.value)} /></Campo></div>
           <div className="acciones">
             <button className="btn" style={{ flex: 1 }} disabled={!listo || ocupado} onClick={guardar}>{ocupado ? 'Guardando…' : `Guardar venta de ${pesos(total)}`}</button>
-            {lineas.length > 0 && <button className="btn secundario" onClick={() => setCarrito({})}>Vaciar</button>}
+            {lineas.length > 0 && <button className="btn secundario" onClick={() => { setCarrito({}); setRecibido(0); }}>Vaciar</button>}
           </div>
         </div>
       </div>

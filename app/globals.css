@@ -216,6 +216,14 @@ table.tabla { width: 100%; border-collapse: collapse; font-size: 14px; }
 .total-grande { display: flex; justify-content: space-between; align-items: baseline; font-size: 15px; padding-top: 10px; border-top: 2px solid var(--texto); margin-top: 6px; }
 .total-grande b { font-size: 30px; font-variant-numeric: tabular-nums; font-family: var(--titular); }
 
+/* Efectivo en la tienda: con cuánto pagó y cuánto devolver */
+.caja-efectivo { margin-top: 10px; padding: 12px; border: 1px solid var(--linea); border-radius: var(--radio); background: var(--fondo, #f6f6f7); }
+.caja-efectivo .btn.activo { background: var(--texto); color: #fff; border-color: var(--texto); }
+.cambio { display: flex; justify-content: space-between; align-items: baseline; margin-top: 10px; padding: 10px 12px; border-radius: var(--radio); background: #e7f4ec; color: #14532d; }
+.cambio span { font-size: 13px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; }
+.cambio b { font-size: 28px; font-family: var(--titular); font-variant-numeric: tabular-nums; }
+.cambio.falta { background: #fdecec; color: #8a1c1c; }
+
 .dos-columnas { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: 14px; align-items: start; }
 @media (max-width: 760px) { .dos-columnas { grid-template-columns: minmax(0, 1fr); } }
 
