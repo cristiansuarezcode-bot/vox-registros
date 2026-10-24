@@ -59,6 +59,26 @@ export function useDatos<T>(accion: string, datos: Record<string, unknown>, deps
   return { d, error, cargando, recargar: () => setN(x => x + 1) };
 }
 
+// ------------------------------------------------------------------ listas largas
+/**
+ * Muestra una lista larga de a pocos (50 por defecto) con un botón "Ver más".
+ * "reinicio" vuelve a empezar desde arriba cuando cambian los filtros.
+ */
+export function usePorPartes<T>(items: T[], tam = 50, reinicio = '') {
+  const [n, setN] = useState(tam);
+  useEffect(() => { setN(tam); }, [reinicio, tam]);
+  const visibles = items.length > n ? items.slice(0, n) : items;
+  const faltan = items.length - visibles.length;
+  const verMas = faltan > 0 ? (
+    <div className="ver-mas">
+      <span className="suave">Se muestran {visibles.length} de {items.length}</span>
+      <button type="button" className="btn secundario chico" onClick={() => setN(x => x + tam)}>Ver {Math.min(tam, faltan)} más</button>
+      {faltan > tam && <button type="button" className="enlace" onClick={() => setN(items.length)}>Ver todos</button>}
+    </div>
+  ) : null;
+  return { visibles, verMas };
+}
+
 // ------------------------------------------------------------------ piezas
 export function Pantalla({ titulo, sub, children }: { titulo: string; sub?: string; children: ReactNode }) {
   const { ir } = useApp();

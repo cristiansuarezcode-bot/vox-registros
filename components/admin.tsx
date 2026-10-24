@@ -2,7 +2,7 @@
 import { useMemo, useState } from 'react';
 import { reemplazarSesion, leerSesion } from '@/lib/api';
 import { fechaCorta, hoy, norm, pesos, primeroDelMes } from '@/lib/util';
-import { BotonAnular, Campo, Cargando, ErrorCaja, Modal, Monto, Pantalla, Segmentado, Selector, TraerDelAdmin, useAccion, useApp, useDatos } from './ui';
+import { BotonAnular, Campo, Cargando, ErrorCaja, Modal, Monto, Pantalla, Segmentado, Selector, TraerDelAdmin, useAccion, useApp, useDatos, usePorPartes } from './ui';
 
 // ================================================================== estudiantes y planes
 type EstFila = { id: string; nombre: string; plan: string; activo: boolean; nota: string; estado_admin?: string; del_admin?: boolean; valor_mensual?: number };
@@ -46,6 +46,7 @@ function ListaEstudiantes({ d, recargar }: { d: ListaEst; recargar: () => void }
       (!plan || (plan === '—' ? !e.plan : norm(e.plan) === norm(plan))) &&
       partes.every(p => norm(e.nombre).includes(p)));
   }, [d, buscar, estado, plan]);
+  const pe = usePorPartes(filas, 50, buscar + estado + plan);
   const activos = d.estudiantes.filter(e => e.activo).length;
   const sinPlan = d.estudiantes.filter(e => e.activo && !e.plan).length;
   return (
@@ -71,7 +72,7 @@ function ListaEstudiantes({ d, recargar }: { d: ListaEst; recargar: () => void }
         {!filas.length ? <p className="vacio">Nadie con estos filtros.</p> : (
           <div className="tabla-envoltura"><table className="tabla tarjetas">
             <thead><tr><th>Nombre</th><th>Plan</th><th>Estado</th><th></th></tr></thead>
-            <tbody>{filas.map(e => (
+            <tbody>{pe.visibles.map(e => (
               <tr key={e.id} className={e.activo ? '' : 'inactivo'}>
                 <td><button className="enlace" onClick={() => ir('ficha', { estudiante_id: e.id })}>{e.nombre}</button> {!e.activo && <span className="chip inactivo">Inactivo</span>}
                   {e.estado_admin && e.activo && e.estado_admin !== 'ACTIVO' && <> <span className="chip">{estadoAdmin(e.estado_admin)}</span></>}
@@ -84,6 +85,8 @@ function ListaEstudiantes({ d, recargar }: { d: ListaEst; recargar: () => void }
             </tbody>
           </table></div>
         )}
+        {pe.verMas}
+        
       </div>
       {editar && <EditarEstudiante e={editar} planes={d.planes} soloNota={!!(d.admin?.conectado && editar.del_admin)} onCerrar={() => setEditar(null)} onListo={() => { setEditar(null); recargar(); }} />}
       {nuevo && <NuevoEstudiante planes={d.planes} onCerrar={() => setNuevo(false)} onListo={() => { setNuevo(false); recargar(); }} />}

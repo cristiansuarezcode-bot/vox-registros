@@ -2,7 +2,7 @@
 import { useMemo, useState, type ReactNode } from 'react';
 import type { Quien } from '@/lib/tipos';
 import { fechaCorta, hoy, norm, pesos, primeroDelMes } from '@/lib/util';
-import { BotonAnular, BuscarQuien, Campo, Cargando, DevolverSaldo, ErrorCaja, Estado, Modal, Pantalla, Segmentado, Selector, SelectorDescuento, SIN_DESCUENTO, datosDescuento, useAccion, useApp, useDatos, type ValorDescuento } from './ui';
+import { BotonAnular, BuscarQuien, Campo, Cargando, DevolverSaldo, ErrorCaja, Estado, Modal, Pantalla, Segmentado, Selector, SelectorDescuento, SIN_DESCUENTO, datosDescuento, useAccion, useApp, useDatos, usePorPartes, type ValorDescuento } from './ui';
 
 const Lista = ({ datos, dinero = true }: { datos: Record<string, number>; dinero?: boolean }) => {
   const filas = Object.entries(datos || {}).sort((a, b) => b[1] - a[1]);
@@ -75,6 +75,7 @@ export function Hoy() {
   }, [cat.conceptos, d?.grupos]);
   const titulo = periodo === 'Día' ? (dia === hoy() ? 'hoy' : fechaCorta(dia)) : periodo === 'Mes' ? nombreMes(mes) : `${fechaCorta(r.desde)} al ${fechaCorta(r.hasta)}`;
   const varios = r.desde !== r.hasta;
+  const detalle = usePorPartes(d?.movimientos || [], 50, r.desde + r.hasta + concepto);
   return (
     <Pantalla titulo="Resumen" sub="Lo que entró y salió en un día, un mes o entre dos fechas">
       <div className="tarjeta">
@@ -103,7 +104,7 @@ export function Hoy() {
           {d.salidas && <Cifra t="Salió (gastos y profes)" v={pesos(d.salidas.total)} />}
           {d.neto !== null && <Cifra t="Quedó" v={pesos(d.neto)} />}
           {!concepto && periodo === 'Día' && <Cifra t="Efectivo neto en caja" v={pesos(d.efectivo_neto_caja)} />}
-          {concepto && <Cifra t="De eso, en efectivo" v={pesos(d.efectivo_neto_caja)} />}
+          {concepto && <Cifra t="De eso, entró a la caja" v={pesos(d.efectivo_neto_caja)} />}
         </div>
         <div className="rejilla">
           {!concepto && <div className="tarjeta"><h3>Por concepto</h3>
@@ -131,7 +132,7 @@ export function Hoy() {
           ) : !d.movimientos.length ? <p className="vacio">No entró nada en estas fechas.</p> : (
             <div className="tabla-envoltura"><table className="tabla tarjetas">
               <thead><tr><th>Fecha</th><th>Concepto</th><th>Quién</th><th>Cuenta</th><th className="num">Valor</th></tr></thead>
-              <tbody>{d.movimientos.slice(0, 300).map(m => (
+              <tbody>{detalle.visibles.map(m => (
                 <tr key={m.id}>
                   <td data-label="Fecha">{fechaCorta(m.fecha)}</td>
                   <td data-label="Concepto"><b>{m.grupo}</b>{m.detalle && <><br /><small className="suave">{m.detalle}</small></>}</td>
@@ -142,7 +143,8 @@ export function Hoy() {
               </tbody>
             </table></div>
           )}
-          {d.movimientos.length > 300 && <p className="suave" style={{ fontSize: 13 }}>Se muestran los 300 más recientes. Escoge un concepto o menos días para ver el resto.</p>}
+          {detalle.verMas}
+          {d.movimientos.length < d.entradas.cantidad && <p className="suave" style={{ fontSize: 13 }}>Hay {d.entradas.cantidad} registros; aquí llegan los {d.movimientos.length} más recientes. Escoge un concepto o menos días para ver el resto.</p>}
         </div>
       </>}
     </Pantalla>
@@ -185,6 +187,7 @@ function SaldosConcepto({ concepto, filtro, buscar }: { concepto: string; filtro
   const [nuevo, setNuevo] = useState(false);
   const base = cat.conceptos.find(c => c.nombre === concepto)?.valor_base || 0;
   const filas = useMemo(() => (d?.filas || []).filter(f => pasaFiltro(f.saldo, filtro) && (!buscar || norm(f.quien).includes(norm(buscar)))), [d, filtro, buscar]);
+  const pf = usePorPartes(filas, 50, concepto + filtro + buscar);
 
   if (error) return <ErrorCaja msg={error} reintentar={recargar} />;
   if (cargando && !d) return <Cargando />;
@@ -210,7 +213,7 @@ function SaldosConcepto({ concepto, filtro, buscar }: { concepto: string; filtro
               {esUniforme ? <th>Pendiente de entregar</th> : <th></th>}
             </tr></thead>
             <tbody>
-              {filas.map((f, i) => (
+              {pf.visibles.map((f, i) => (
                 <tr key={(f.cargo || f.pedido || '') + i}>
                   <td>{f.estudiante_id ? <button className="enlace" onClick={() => ir('ficha', { estudiante_id: f.estudiante_id })}>{f.quien}</button> : f.quien}
                     {esUniforme && <><br /><small className="suave">{f.pedido} · {fechaCorta(f.fecha || '')}</small></>}
@@ -228,6 +231,7 @@ function SaldosConcepto({ concepto, filtro, buscar }: { concepto: string; filtro
             </tbody>
           </table></div>
         )}
+        {pf.verMas}
       </div>
       {editar && <EditarCargo fila={editar} base={base} concepto={concepto} onCerrar={() => setEditar(null)} onListo={() => { setEditar(null); recargar(); }} />}
       {nuevo && <NuevoCargo concepto={concepto} base={base} onCerrar={() => setNuevo(false)} onListo={() => { setNuevo(false); recargar(); }} />}
@@ -285,9 +289,10 @@ function NuevoCargo({ concepto, base, onCerrar, onListo }: { concepto: string; b
 function SaldosTienda({ filtro, buscar }: { filtro: string; buscar: string }) {
   const { ir } = useApp();
   const { d, error, cargando, recargar } = useDatos<{ cuentas_tienda: FilaTienda[] }>('reporteTienda', { desde: hoy(), hasta: hoy() }, []);
+  const filas = (d?.cuentas_tienda || []).filter(f => pasaFiltro(f.saldo, filtro) && (!buscar || norm(f.quien).includes(norm(buscar))));
+  const pt = usePorPartes(filas, 50, filtro + buscar);
   if (error) return <ErrorCaja msg={error} reintentar={recargar} />;
   if (cargando && !d) return <Cargando />;
-  const filas = (d?.cuentas_tienda || []).filter(f => pasaFiltro(f.saldo, filtro) && (!buscar || norm(f.quien).includes(norm(buscar))));
   const porCobrar = (d?.cuentas_tienda || []).filter(f => f.saldo > 0).reduce((s, f) => s + f.saldo, 0);
   return (
     <>
@@ -297,13 +302,14 @@ function SaldosTienda({ filtro, buscar }: { filtro: string; buscar: string }) {
         {!filas.length ? <p className="vacio">Nadie con este filtro.</p> : (
           <div className="tabla-envoltura"><table className="tabla tarjetas">
             <thead><tr><th>Quién</th><th className="num">Fiado</th><th className="num">Pagado</th><th>Estado</th></tr></thead>
-            <tbody>{filas.map((f, i) => <tr key={i}>
+            <tbody>{pt.visibles.map((f, i) => <tr key={i}>
               <td>{f.estudiante_id ? <button className="enlace" onClick={() => ir('ficha', { estudiante_id: f.estudiante_id })}>{f.quien}</button> : f.quien}</td>
               <td className="num" data-label="Fiado">{pesos(f.fiado)}</td><td className="num" data-label="Pagado">{pesos(f.pagado)}</td><td data-label="Estado"><Estado saldo={f.saldo} />
                 {f.saldo < 0 && <><br /><AccionesFavor estudiante_id={f.estudiante_id || undefined} persona={f.estudiante_id ? undefined : f.quien} nombre={f.quien} concepto="Cuenta tienda" favor={-f.saldo} onListo={recargar} /></>}
                 {f.saldo > 0 && <><br /><button className="btn secundario chico" style={{ marginTop: 4 }} onClick={() => ir('pago', { ...(f.estudiante_id ? { estudiante_id: f.estudiante_id } : { persona: f.quien }), concepto: 'Cuenta tienda', valor: String(f.saldo) })}>Registrar pago</button></>}</td></tr>)}</tbody>
           </table></div>
         )}
+        {pt.verMas}
       </div>
     </>
   );
@@ -419,6 +425,7 @@ export function Cuentas() {
   const [cuenta, setCuenta] = useState('');
   const { d, error, cargando, recargar } = useDatos<RepCuentas>('reporteCuentas', { desde, hasta }, [desde, hasta]);
   const movs = (d?.movimientos || []).filter(m => !cuenta || m.cuenta === cuenta);
+  const pm = usePorPartes(movs, 50, desde + hasta + cuenta);
   return (
     <Pantalla titulo="Cuentas" sub="Entradas y salidas por cuenta">
       <Rango desde={desde} hasta={hasta} setDesde={setDesde} setHasta={setHasta} />
@@ -433,8 +440,9 @@ export function Cuentas() {
         <div className="tarjeta"><h3>Movimientos{cuenta ? ` · ${cuenta}` : ''} {cuenta && <button className="enlace" onClick={() => setCuenta('')}>(ver todas)</button>}</h3>
           {!movs.length ? <p className="vacio">Sin movimientos.</p> : <div className="tabla-envoltura"><table className="tabla">
             <thead><tr><th>Fecha</th><th>Cuenta</th><th>Tipo</th><th>Detalle</th><th className="num">Valor</th></tr></thead>
-            <tbody>{movs.slice(0, 300).map((m, i) => <tr key={m.id + i}><td>{fechaCorta(m.fecha)}</td><td>{m.cuenta}</td><td>{m.tipo}</td><td>{m.detalle}</td><td className="num" style={{ color: m.valor < 0 ? 'var(--error)' : 'var(--ok)' }}>{pesos(m.valor)}</td></tr>)}</tbody>
+            <tbody>{pm.visibles.map((m, i) => <tr key={m.id + i}><td>{fechaCorta(m.fecha)}</td><td>{m.cuenta}</td><td>{m.tipo}</td><td>{m.detalle}</td><td className="num" style={{ color: m.valor < 0 ? 'var(--error)' : 'var(--ok)' }}>{pesos(m.valor)}</td></tr>)}</tbody>
           </table></div>}
+          {pm.verMas}
         </div>
       </>}
     </Pantalla>
@@ -447,6 +455,7 @@ export function ReporteProfes() {
   const [desde, setDesde] = useState(primeroDelMes());
   const [hasta, setHasta] = useState(hoy());
   const { d, error, cargando, recargar } = useDatos<RepProfes>('reporteProfes', { desde, hasta }, [desde, hasta]);
+  const pp = usePorPartes(d?.filas || [], 50, desde + hasta);
   return (
     <Pantalla titulo="Pagos a profes" sub="Cuánto se le ha pagado a cada profe">
       <Rango desde={desde} hasta={hasta} setDesde={setDesde} setHasta={setHasta} />
@@ -459,8 +468,8 @@ export function ReporteProfes() {
         </div>
         {d.filas.length > 0 && <div className="tarjeta"><h3>Detalle</h3><div className="tabla-envoltura"><table className="tabla">
           <thead><tr><th>Fecha</th><th>Profe</th><th>Periodo</th><th className="num">Clases</th><th className="num">Por clase</th><th className="num">Total</th><th></th></tr></thead>
-          <tbody>{d.filas.map(f => <tr key={f.id}><td>{fechaCorta(f.fecha)}</td><td>{f.profe}</td><td>{f.periodo}</td><td className="num">{f.clases}</td><td className="num">{pesos(f.valor_clase)}</td><td className="num">{pesos(f.total)}</td><td><BotonAnular hoja="Pago profes" id={f.pago} onListo={recargar} etiqueta="Anular pago" /></td></tr>)}</tbody>
-        </table></div></div>}
+          <tbody>{pp.visibles.map(f => <tr key={f.id}><td>{fechaCorta(f.fecha)}</td><td>{f.profe}</td><td>{f.periodo}</td><td className="num">{f.clases}</td><td className="num">{pesos(f.valor_clase)}</td><td className="num">{pesos(f.total)}</td><td><BotonAnular hoja="Pago profes" id={f.pago} onListo={recargar} etiqueta="Anular pago" /></td></tr>)}</tbody>
+        </table></div>{pp.verMas}</div>}
       </>}
     </Pantalla>
   );
@@ -490,6 +499,7 @@ export function Historial() {
     { hoja, limite: 300, buscar: q, ...(conFecha ? { desde, hasta } : {}) }, [hoja, desde, hasta, q]);
   const conf = HOJAS[hoja];
   const vistos = new Set<string>();
+  const ph = usePorPartes(d?.filas || [], 50, hoja + desde + hasta + q);
   return (
     <Pantalla titulo="Historial y anulaciones" sub="Todo lo registrado. Anular deja rastro: quién, cuándo y por qué">
       <div className="segmentado" style={{ marginBottom: 12 }}>{Object.keys(HOJAS).map(h => <button key={h} className={h === hoja ? 'activo' : ''} onClick={() => setHoja(h)}>{h}</button>)}</div>
@@ -504,7 +514,7 @@ export function Historial() {
         <p className="suave mt0" style={{ fontSize: 13 }}>{d.total} registro(s){d.total > d.filas.length ? `, se muestran los ${d.filas.length} más recientes` : ''}.</p>
         {!d.filas.length ? <p className="vacio">Nada en estas fechas.</p> : <div className="tabla-envoltura"><table className="tabla">
           <thead><tr>{conf.cols.map(([, t]) => <th key={t} className={DINERO.has(t.toLowerCase()) ? 'num' : ''}>{t}</th>)}<th>Registró</th><th></th></tr></thead>
-          <tbody>{d.filas.map((f, i) => {
+          <tbody>{ph.visibles.map((f, i) => {
             const anulado = f.estado === 'anulado';
             const idAnular = conf.grupo ? f[conf.grupo] : f.id;
             const mostrarBoton = conf.anulable && !anulado && !vistos.has(idAnular);
@@ -525,6 +535,7 @@ export function Historial() {
             );
           })}</tbody>
         </table></div>}
+        {ph.verMas}
       </div>}
     </Pantalla>
   );

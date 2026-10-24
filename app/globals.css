@@ -230,6 +230,7 @@ table.tabla { width: 100%; border-collapse: collapse; font-size: 14px; }
 
 .fila-dos .segmentado { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .fila-dos .segmentado button { padding: 8px 6px; font-size: 14px; line-height: 1.2; white-space: normal; min-height: 48px; }
+.ver-mas { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 12px; font-size: 13px; }
 .fila-dato { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; padding: 8px 0; }
 .fila-dato b { font-size: 20px; font-variant-numeric: tabular-nums; }
 .conteo { margin-top: 12px; display: grid; gap: 6px; }
