@@ -16,7 +16,7 @@
 // Hoja de cálculo que sirve de base de datos (Registros Vox Corpus Danza, cuenta voxcorpusdanza@gmail.com).
 const HOJA_ID = '1XWxLoazHg4dCTqvaM0E2ZQYFzcL0XjNFcp_xQ4B51p0';
 const TZ = 'America/Bogota';
-const VERSION = '1.6.0';
+const VERSION = '1.6.1';
 const SESION_SEG = 6 * 60 * 60;          // máximo que permite CacheService
 const INTENTOS_MAX = 5;                  // claves erradas antes de bloquear
 const BLOQUEO_SEG = 15 * 60;
@@ -1642,6 +1642,54 @@ function ajustesCuentas23oct() {
   const msg = res.join('\n');
   console.log(msg);
   return msg;
+}
+
+// ===================================================================== tienda: de Cuenta Cristian a Nequi (23/10)
+/*
+ * Lo de la tienda que quedó registrado como si hubiera entrado a "Cuenta Cristian" en realidad entró a Nequi.
+ * Toca ventas cobradas por transferencia y abonos a "Cuenta tienda" (valores positivos), solo los válidos.
+ * revisarTiendaANequi: solo cuenta y muestra. pasarTiendaANequi: los cambia y deja cada cambio en la bitácora.
+ */
+function tiendaEnCuentaCristian_() {
+  const ventas = tabla_(H.VENTAS).filas.filter(v => esValido_(v) && v.recibido_en === 'Cuenta Cristian' && esVentaCobrada_(v));
+  const pagos = tabla_(H.PAGOS).filas.filter(p => esValido_(p) && p.recibido_en === 'Cuenta Cristian' && norm_(p.concepto) === 'cuenta tienda');
+  return { ventas: ventas, pagos: pagos.filter(p => num_(p.valor) > 0), devoluciones: pagos.filter(p => num_(p.valor) <= 0) };
+}
+
+function resumenTiendaANequi_(x) {
+  const nV = Object.keys(x.ventas.reduce((o, v) => (o[v.venta] = 1, o), {})).length;
+  return 'Ventas de la tienda: ' + nV + ' (' + x.ventas.length + ' líneas) por ' + pesos_(sum_(x.ventas, 'total')) +
+    '\nPagos de fiados (Cuenta tienda): ' + x.pagos.length + ' por ' + pesos_(sum_(x.pagos, 'valor')) +
+    (x.devoluciones.length ? '\nDevoluciones que salieron de Cuenta Cristian (no se tocan): ' + x.devoluciones.length + ' por ' + pesos_(sum_(x.devoluciones, 'valor')) : '');
+}
+
+function revisarTiendaANequi() {
+  nuevaLectura_();
+  const msg = 'Se pasarían a Nequi:\n' + resumenTiendaANequi_(tiendaEnCuentaCristian_());
+  console.log(msg);
+  return msg;
+}
+
+function pasarTiendaANequi() {
+  nuevaLectura_();
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(30000)) throw err_('Hay alguien guardando. Intenta en un momento.');
+  try {
+    const cuentas = indicePorNombre_(activos_(H.CUENTAS));
+    if (!cuentas['nequi']) throw err_('No existe la cuenta Nequi activa. Ejecuta primero ajustesCuentas23oct.');
+    const x = tiendaEnCuentaCristian_();
+    const ses = { nombre: 'Tienda a Nequi 23/10' };
+    const tv = tabla_(H.VENTAS), tp = tabla_(H.PAGOS);
+    const porId = (t, id) => t.filas.find(f => f.id === id);
+    x.ventas.forEach(v => actualizar_(tv, porId(tv, v.id), { recibido_en: 'Nequi' }));
+    x.pagos.forEach(p => actualizar_(tp, porId(tp, p.id), { recibido_en: 'Nequi' }));
+    if (x.ventas.length || x.pagos.length) bitacora_(ses, 'tiendaANequi', H.VENTAS + ' y ' + H.PAGOS, '',
+      { de: 'Cuenta Cristian', a: 'Nequi', ventas: x.ventas.map(v => v.id), pagos: x.pagos.map(p => p.id), total: sum_(x.ventas, 'total') + sum_(x.pagos, 'valor') });
+    SpreadsheetApp.flush();
+    const msg = (x.ventas.length || x.pagos.length ? 'Pasado a Nequi:\n' : 'No había nada de la tienda en Cuenta Cristian.\n') + resumenTiendaANequi_(x);
+    console.log(msg);
+    return msg;
+  } finally { lock.releaseLock(); }
 }
 
 // ===================================================================== estudiantes desde el admin (Supabase)
