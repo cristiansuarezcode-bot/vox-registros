@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from 'react';
 import type { Quien } from '@/lib/tipos';
 import { api } from '@/lib/api';
 import { hoy, mesActual, norm, pesos } from '@/lib/util';
-import { BuscarQuien, Campo, Estado, Monto, Pantalla, Segmentado, Selector, SelectorDescuento, SIN_DESCUENTO, cuentaPorMetodo, cuentasBanco, datosDescuento, datosQuien, useAccion, useApp, useSaldoFavor, type ValorDescuento } from './ui';
+import { BuscarQuien, Campo, Estado, Monto, Pantalla, Segmentado, Selector, SelectorDescuento, SIN_DESCUENTO, cuentaPorMetodo, cuentasBanco, cuentasTienda, cuentasTodas, datosDescuento, datosQuien, useAccion, useApp, useSaldoFavor, type ValorDescuento } from './ui';
 
 export const SALDO = 'Saldo a favor';
 
@@ -49,8 +49,8 @@ export function RegistrarPago() {
     : params.persona ? { persona: params.persona, nombre: params.persona } : null;
   const [fecha, setFecha] = useState(hoy());
   const [quien, setQuien] = useState<Quien>(inicial);
-  const [concepto, setConcepto] = useState('');
-  const [valor, setValor] = useState(0);
+  const [concepto, setConcepto] = useState(params.concepto && cat.conceptos.some(c => c.nombre === params.concepto) ? params.concepto : '');
+  const [valor, setValor] = useState(Number(params.valor) > 0 ? Number(params.valor) : 0);
   const [metodo, setMetodo] = useState(params.metodo === 'saldo' ? SALDO : metodosBase[0] || 'Efectivo');
   const [recibido, setRecibido] = useState('Caja');
   const [pedido, setPedido] = useState('');
@@ -85,6 +85,7 @@ export function RegistrarPago() {
   const base = concepto ? valorSugerido(concepto, quien) : 0;
   const elegirConcepto = (c: string) => {
     setConcepto(c);
+    if (metodo !== SALDO && (esTienda(c) !== esTienda(concepto) || !(esTienda(c) ? ['Caja', ...cuentasTienda(cat), ...cuentasBanco(cat)] : cuentasBanco(cat)).includes(recibido))) setRecibido(cuentaPara(metodo, c));
     setDesc(SIN_DESCUENTO);
     const v = valorSugerido(c, quien);
     if (v) setValor(v);
@@ -95,7 +96,11 @@ export function RegistrarPago() {
     setDesc(SIN_DESCUENTO);
     if (concepto) { const v = valorSugerido(concepto, q); if (v) setValor(v); }
   };
-  const elegirMetodo = (m: string) => { setMetodo(m); if (m !== SALDO) setRecibido(cuentaPorMetodo(m, cat)); };
+  // Lo que se le paga a la tienda (fiados) puede entrar a Nequi; los demás conceptos, a las cuentas de la academia.
+  const esTienda = (c: string) => norm(c) === 'cuenta tienda';
+  const opcionesCuenta = esTienda(concepto) ? ['Caja', ...cuentasTienda(cat), ...cuentasBanco(cat).filter(c => c !== 'Caja')] : cuentasBanco(cat);
+  const cuentaPara = (m: string, c: string) => norm(m) === 'efectivo' ? 'Caja' : esTienda(c) ? cuentasTienda(cat)[0] : cuentaPorMetodo(m, cat);
+  const elegirMetodo = (m: string) => { setMetodo(m); if (m !== SALDO) setRecibido(cuentaPara(m, concepto)); };
   const elegirDescuento = (d: ValorDescuento) => { setDesc(d); if (base) setValor(base - d.descuento); };
   // Lo que puede usar: su saldo a favor sin contar el del mismo concepto que va a pagar.
   const disponible = favor.items.filter(i => i.saldo < 0 && !(norm(i.concepto) === norm(concepto) && (i.pedido || '') === (pedido || ''))).reduce((s, i) => s - i.saldo, 0);
@@ -144,7 +149,7 @@ export function RegistrarPago() {
             </div>
           ) : (
             <Campo label="¿A dónde entró la plata?" ancho ayuda={metodo !== 'Efectivo' ? `Sugerida por la fecha: ${cat.cuenta_sugerida}. Cámbiala si la familia transfirió a otra.` : undefined}>
-              <Segmentado opciones={cuentasBanco(cat)} valor={recibido} onChange={setRecibido} />
+              <Segmentado opciones={opcionesCuenta} valor={recibido} onChange={setRecibido} />
             </Campo>
           )}
           <Campo label="Nota (opcional)" ancho><input value={nota} onChange={e => setNota(e.target.value)} placeholder="Ej: abono, pagó la mamá…" /></Campo>
@@ -214,7 +219,7 @@ export function PagoProfe() {
         <div className="separador" />
         <div className="rejilla">
           <Campo label="Método" ancho><Segmentado opciones={metodos} valor={metodo} onChange={setMetodo} /></Campo>
-          <Campo label="¿De dónde salió la plata?" ancho><Segmentado opciones={cuentasBanco(cat)} valor={desde} onChange={setDesde} /></Campo>
+          <Campo label="¿De dónde salió la plata?" ancho><Segmentado opciones={cuentasTodas(cat)} valor={desde} onChange={setDesde} /></Campo>
           <Campo label="Nota (opcional)" ancho><input value={nota} onChange={e => setNota(e.target.value)} placeholder="Ej: incluye reposición del sábado" /></Campo>
         </div>
         <div className="acciones">
@@ -250,7 +255,7 @@ export function Gasto() {
           <Campo label="¿Qué se compró o pagó?"><input value={descripcion} onChange={e => setDescripcion(e.target.value)} placeholder="Ej: jabón y toallas" /></Campo>
           <Campo label="Valor"><Monto valor={valor} onChange={setValor} /></Campo>
           <Campo label="Fecha"><input type="date" value={fecha} max={hoy()} onChange={e => setFecha(e.target.value)} /></Campo>
-          <Campo label="¿De dónde salió la plata?" ancho><Segmentado opciones={cuentasBanco(cat)} valor={desde} onChange={setDesde} /></Campo>
+          <Campo label="¿De dónde salió la plata?" ancho><Segmentado opciones={cuentasTodas(cat)} valor={desde} onChange={setDesde} /></Campo>
           <Campo label="Nota (opcional)" ancho><input value={nota} onChange={e => setNota(e.target.value)} placeholder="Ej: lo pagó Liz y se le devolvió" /></Campo>
         </div>
         <div className="acciones"><button className="btn" disabled={!categoria || !descripcion.trim() || !valor || ocupado} onClick={guardar}>{ocupado ? 'Guardando…' : 'Guardar gasto'}</button></div>
@@ -263,7 +268,7 @@ export function Gasto() {
 export function Traslado() {
   const { cat, aviso } = useApp();
   const { ocupado, correr } = useAccion();
-  const origenes = cat.cuentas_todas?.length ? cat.cuentas_todas.filter(c => c !== 'Sin dato') : cuentasBanco(cat);
+  const origenes = cat.cuentas_todas?.length ? cat.cuentas_todas.filter(c => c !== 'Sin dato') : cuentasTodas(cat);
   const [fecha, setFecha] = useState(hoy());
   const [de, setDe] = useState('');
   const [a, setA] = useState('');
@@ -278,7 +283,7 @@ export function Traslado() {
       <div className="tarjeta">
         <div className="rejilla">
           <Campo label="Sale de" ancho><Segmentado opciones={origenes} valor={de} onChange={setDe} /></Campo>
-          <Campo label="Entra a" ancho><Segmentado opciones={cuentasBanco(cat).filter(c => c !== de)} valor={a} onChange={setA} /></Campo>
+          <Campo label="Entra a" ancho><Segmentado opciones={cuentasTodas(cat).filter(c => c !== de)} valor={a} onChange={setA} /></Campo>
           <Campo label="Valor"><Monto valor={valor} onChange={setValor} /></Campo>
           <Campo label="Fecha"><input type="date" value={fecha} max={hoy()} onChange={e => setFecha(e.target.value)} /></Campo>
           <Campo label="Nota (opcional)" ancho><input value={nota} onChange={e => setNota(e.target.value)} placeholder="Ej: retiro por cajero, se le entregó a Cristian" /></Campo>

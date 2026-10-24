@@ -158,7 +158,7 @@ const ADMINISTRAR = [
   { v: 'cuenta', i: '🔑', t: 'Mi cuenta', s: 'Cambiar clave y usuarios' },
 ];
 const CONSULTAR = [
-  { v: 'hoy', i: '📅', t: 'Resumen del día', s: 'Lo que entró y salió' },
+  { v: 'hoy', i: '📅', t: 'Resumen', s: 'Por día, mes o fechas' },
   { v: 'saldos', i: '📋', t: 'Saldos y cargos', s: 'Quién debe qué' },
   { v: 'reporteTienda', i: '📈', t: 'Ventas tienda', s: 'Por día y producto' },
   { v: 'ficha', i: '👤', t: 'Ficha de estudiante', s: 'Todo de una persona' },

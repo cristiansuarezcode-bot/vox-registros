@@ -218,7 +218,7 @@ table.tabla { width: 100%; border-collapse: collapse; font-size: 14px; }
 
 /* Efectivo en la tienda: con cuánto pagó y cuánto devolver */
 .caja-efectivo { margin-top: 10px; padding: 12px; border: 1px solid var(--linea); border-radius: var(--radio); background: var(--fondo, #f6f6f7); }
-.caja-efectivo .btn.activo { background: var(--texto); color: #fff; border-color: var(--texto); }
+.btn.secundario.activo, .caja-efectivo .btn.activo { background: var(--texto); color: #fff; border-color: var(--texto); }
 .cambio { display: flex; justify-content: space-between; align-items: baseline; margin-top: 10px; padding: 10px 12px; border-radius: var(--radio); background: #e7f4ec; color: #14532d; }
 .cambio span { font-size: 13px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; }
 .cambio b { font-size: 28px; font-family: var(--titular); font-variant-numeric: tabular-nums; }

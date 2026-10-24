@@ -41,39 +41,108 @@ function Rango({ desde, hasta, setDesde, setHasta }: { desde: string; hasta: str
   );
 }
 
-// ------------------------------------------------------------------ hoy
-type ResDia = {
-  fecha: string;
-  pagos: { total: number; cantidad: number; por_concepto: Record<string, number>; por_cuenta: Record<string, number>; por_metodo: Record<string, number> };
-  tienda: { vendido: number; ventas: number; por_metodo: Record<string, number>; productos: Record<string, number> };
-  gastos: { total: number; por_cuenta: Record<string, number> };
-  pago_profes: { total: number; por_profe: Record<string, number> };
-  traslados: { de: string; a: string; valor: number; nota: string }[];
+// ------------------------------------------------------------------ resumen (día, mes o fechas)
+type Mov = { fecha: string; grupo: string; concepto: string; quien: string; detalle: string; valor: number; metodo: string; cuenta: string; id: string };
+type Resumen = {
+  desde: string; hasta: string; concepto: string; grupos: string[];
+  entradas: { total: number; cantidad: number; por_concepto: Record<string, number>; por_cuenta: Record<string, number>; por_metodo: Record<string, number>; por_dia: Record<string, number> };
+  salidas: null | { total: number; gastos: number; por_categoria: Record<string, number>; pago_profes: number; por_profe: Record<string, number> };
+  neto: number | null;
   efectivo_neto_caja: number;
+  traslados: { de: string; a: string; valor: number; nota: string }[];
+  movimientos: Mov[];
 };
+
+const finDeMes = (mes: string) => { const [a, m] = mes.split('-').map(Number); const ultimo = new Date(Date.UTC(a, m, 0)).getUTCDate(); const f = `${mes}-${String(ultimo).padStart(2, '0')}`; return f > hoy() ? hoy() : f; };
+const mesAnterior = () => { const [a, m] = hoy().split('-').map(Number); return m === 1 ? `${a - 1}-12` : `${a}-${String(m - 1).padStart(2, '0')}`; };
+const NOMBRE_MES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
+const nombreMes = (mes: string) => `${NOMBRE_MES[Number(mes.slice(5, 7)) - 1]} ${mes.slice(0, 4)}`;
+
 export function Hoy() {
-  const [fecha, setFecha] = useState(hoy());
-  const { d, error, cargando, recargar } = useDatos<ResDia>('resumenDia', { fecha }, [fecha]);
+  const { cat } = useApp();
+  const [periodo, setPeriodo] = useState<'Día' | 'Mes' | 'Fechas'>('Día');
+  const [dia, setDia] = useState(hoy());
+  const [mes, setMes] = useState(hoy().slice(0, 7));
+  const [desde, setDesde] = useState(primeroDelMes());
+  const [hasta, setHasta] = useState(hoy());
+  const [concepto, setConcepto] = useState('');
+  const [verDetalle, setVerDetalle] = useState(false);
+  const r = periodo === 'Día' ? { desde: dia, hasta: dia } : periodo === 'Mes' ? { desde: mes + '-01', hasta: finDeMes(mes) } : { desde, hasta };
+  const { d, error, cargando, recargar } = useDatos<Resumen>('resumen', { ...r, concepto }, [r.desde, r.hasta, concepto]);
+  const opciones = useMemo(() => {
+    const base = cat.conceptos.map(c => c.nombre).filter(n => norm(n) !== 'cuenta tienda');
+    return [...new Set([...base, 'Tienda', ...(d?.grupos || [])])].sort((a, b) => a.localeCompare(b, 'es'));
+  }, [cat.conceptos, d?.grupos]);
+  const titulo = periodo === 'Día' ? (dia === hoy() ? 'hoy' : fechaCorta(dia)) : periodo === 'Mes' ? nombreMes(mes) : `${fechaCorta(r.desde)} al ${fechaCorta(r.hasta)}`;
+  const varios = r.desde !== r.hasta;
   return (
-    <Pantalla titulo="Resumen del día" sub="Lo que entró y salió en un día">
-      <div className="tarjeta"><div className="rejilla"><Campo label="Día"><input type="date" value={fecha} max={hoy()} onChange={e => setFecha(e.target.value)} /></Campo></div></div>
+    <Pantalla titulo="Resumen" sub="Lo que entró y salió en un día, un mes o entre dos fechas">
+      <div className="tarjeta">
+        <div className="rejilla">
+          <Campo label="Ver"><Segmentado opciones={['Día', 'Mes', 'Fechas'] as const} valor={periodo} onChange={setPeriodo} /></Campo>
+          {periodo === 'Día' && <Campo label="Día"><input type="date" value={dia} max={hoy()} onChange={e => setDia(e.target.value)} /></Campo>}
+          {periodo === 'Mes' && <Campo label="Mes">
+            <input type="month" value={mes} max={hoy().slice(0, 7)} onChange={e => e.target.value && setMes(e.target.value)} />
+            <div className="chips" style={{ marginTop: 6 }}>
+              <button type="button" className={'btn secundario chico' + (mes === hoy().slice(0, 7) ? ' activo' : '')} onClick={() => setMes(hoy().slice(0, 7))}>Este mes</button>
+              <button type="button" className={'btn secundario chico' + (mes === mesAnterior() ? ' activo' : '')} onClick={() => setMes(mesAnterior())}>Mes pasado</button>
+            </div>
+          </Campo>}
+          {periodo === 'Fechas' && <>
+            <Campo label="Desde"><input type="date" value={desde} max={hasta} onChange={e => setDesde(e.target.value)} /></Campo>
+            <Campo label="Hasta"><input type="date" value={hasta} max={hoy()} onChange={e => setHasta(e.target.value)} /></Campo>
+          </>}
+          <Campo label="Concepto"><Selector valor={concepto} onChange={setConcepto} vacio="Todos los conceptos" opciones={opciones} /></Campo>
+        </div>
+      </div>
       {error && <ErrorCaja msg={error} reintentar={recargar} />}
       {cargando && !d && <Cargando />}
       {d && <>
         <div className="cifras">
-          <Cifra t={`Pagos recibidos (${d.pagos.cantidad})`} v={pesos(d.pagos.total)} />
-          <Cifra t={`Tienda (${d.tienda.ventas} ventas)`} v={pesos(d.tienda.vendido)} />
-          <Cifra t="Gastos" v={pesos(d.gastos.total)} />
-          <Cifra t="Pagos a profes" v={pesos(d.pago_profes.total)} />
-          <Cifra t="Efectivo neto en caja" v={pesos(d.efectivo_neto_caja)} destacada />
+          <Cifra t={concepto ? `Entró por ${concepto} (${titulo})` : `Entró (${titulo})`} v={pesos(d.entradas.total)} destacada />
+          {d.salidas && <Cifra t="Salió (gastos y profes)" v={pesos(d.salidas.total)} />}
+          {d.neto !== null && <Cifra t="Quedó" v={pesos(d.neto)} />}
+          {!concepto && periodo === 'Día' && <Cifra t="Efectivo neto en caja" v={pesos(d.efectivo_neto_caja)} />}
+          {concepto && <Cifra t="De eso, en efectivo" v={pesos(d.efectivo_neto_caja)} />}
         </div>
         <div className="rejilla">
-          <div className="tarjeta"><h3>Pagos por concepto</h3><Lista datos={d.pagos.por_concepto} /></div>
-          <div className="tarjeta"><h3>Pagos por cuenta</h3><Lista datos={d.pagos.por_cuenta} /></div>
-          <div className="tarjeta"><h3>Tienda por método</h3><Lista datos={d.tienda.por_metodo} /></div>
-          <div className="tarjeta"><h3>Productos vendidos</h3><Lista datos={d.tienda.productos} dinero={false} /></div>
-          {d.gastos.total > 0 && <div className="tarjeta"><h3>Gastos por cuenta</h3><Lista datos={d.gastos.por_cuenta} /></div>}
+          {!concepto && <div className="tarjeta"><h3>Por concepto</h3>
+            {!Object.keys(d.entradas.por_concepto).length ? <p className="vacio">Nada.</p> :
+              <ul className="lista-simple">{Object.entries(d.entradas.por_concepto).sort((a, b) => b[1] - a[1]).map(([k, v]) => (
+                <li key={k}><button className="enlace" onClick={() => setConcepto(k)}>{k}</button><b className="monto">{pesos(v)}</b></li>))}
+              </ul>}
+            <p className="suave" style={{ fontSize: 12, marginBottom: 0 }}>Toca un concepto para ver solo ese. “Tienda” incluye ventas y pagos de fiados.</p>
+          </div>}
+          <div className="tarjeta"><h3>Por cuenta</h3><Lista datos={d.entradas.por_cuenta} /></div>
+          <div className="tarjeta"><h3>Por método</h3><Lista datos={d.entradas.por_metodo} /></div>
+          {varios && <div className="tarjeta"><h3>Por día</h3>
+            {!Object.keys(d.entradas.por_dia).length ? <p className="vacio">Nada.</p> :
+              <ul className="lista-simple">{Object.entries(d.entradas.por_dia).sort((a, b) => (a[0] < b[0] ? 1 : -1)).map(([k, v]) => <li key={k}><span>{fechaCorta(k)}</span><b className="monto">{pesos(v)}</b></li>)}</ul>}
+          </div>}
+          {d.salidas && d.salidas.gastos > 0 && <div className="tarjeta"><h3>Gastos por categoría</h3><Lista datos={d.salidas.por_categoria} /></div>}
+          {d.salidas && d.salidas.pago_profes > 0 && <div className="tarjeta"><h3>Pagos a profes</h3><Lista datos={d.salidas.por_profe} /></div>}
           {d.traslados.length > 0 && <div className="tarjeta"><h3>Traslados</h3><ul className="lista-simple">{d.traslados.map((t, i) => <li key={i}><span>{t.de} → {t.a}</span><b>{pesos(t.valor)}</b></li>)}</ul></div>}
+        </div>
+        <div className="tarjeta">
+          <h3>{concepto ? `Detalle de ${concepto}` : 'Detalle de lo que entró'} <span className="suave" style={{ fontWeight: 400, fontSize: 14 }}>· {d.entradas.cantidad} registro(s)</span></h3>
+          {concepto && <div className="acciones mt0" style={{ marginTop: 0, marginBottom: 8 }}><button className="btn secundario chico" onClick={() => setConcepto('')}>Ver todos los conceptos</button></div>}
+          {!concepto && periodo !== 'Día' && !verDetalle && d.movimientos.length > 0 ? (
+            <button className="btn secundario" onClick={() => setVerDetalle(true)}>Ver los {d.entradas.cantidad} registros</button>
+          ) : !d.movimientos.length ? <p className="vacio">No entró nada en estas fechas.</p> : (
+            <div className="tabla-envoltura"><table className="tabla tarjetas">
+              <thead><tr><th>Fecha</th><th>Concepto</th><th>Quién</th><th>Cuenta</th><th className="num">Valor</th></tr></thead>
+              <tbody>{d.movimientos.slice(0, 300).map(m => (
+                <tr key={m.id}>
+                  <td data-label="Fecha">{fechaCorta(m.fecha)}</td>
+                  <td data-label="Concepto"><b>{m.grupo}</b>{m.detalle && <><br /><small className="suave">{m.detalle}</small></>}</td>
+                  <td data-label="Quién">{m.quien || <span className="suave">—</span>}</td>
+                  <td data-label="Cuenta">{m.cuenta}<br /><small className="suave">{m.metodo}</small></td>
+                  <td className="num" data-label="Valor" style={m.valor < 0 ? { color: 'var(--error)' } : undefined}>{pesos(m.valor)}</td>
+                </tr>))}
+              </tbody>
+            </table></div>
+          )}
+          {d.movimientos.length > 300 && <p className="suave" style={{ fontSize: 13 }}>Se muestran los 300 más recientes. Escoge un concepto o menos días para ver el resto.</p>}
         </div>
       </>}
     </Pantalla>
@@ -231,7 +300,8 @@ function SaldosTienda({ filtro, buscar }: { filtro: string; buscar: string }) {
             <tbody>{filas.map((f, i) => <tr key={i}>
               <td>{f.estudiante_id ? <button className="enlace" onClick={() => ir('ficha', { estudiante_id: f.estudiante_id })}>{f.quien}</button> : f.quien}</td>
               <td className="num" data-label="Fiado">{pesos(f.fiado)}</td><td className="num" data-label="Pagado">{pesos(f.pagado)}</td><td data-label="Estado"><Estado saldo={f.saldo} />
-                {f.saldo < 0 && <><br /><AccionesFavor estudiante_id={f.estudiante_id || undefined} persona={f.estudiante_id ? undefined : f.quien} nombre={f.quien} concepto="Cuenta tienda" favor={-f.saldo} onListo={recargar} /></>}</td></tr>)}</tbody>
+                {f.saldo < 0 && <><br /><AccionesFavor estudiante_id={f.estudiante_id || undefined} persona={f.estudiante_id ? undefined : f.quien} nombre={f.quien} concepto="Cuenta tienda" favor={-f.saldo} onListo={recargar} /></>}
+                {f.saldo > 0 && <><br /><button className="btn secundario chico" style={{ marginTop: 4 }} onClick={() => ir('pago', { ...(f.estudiante_id ? { estudiante_id: f.estudiante_id } : { persona: f.quien }), concepto: 'Cuenta tienda', valor: String(f.saldo) })}>Registrar pago</button></>}</td></tr>)}</tbody>
           </table></div>
         )}
       </div>

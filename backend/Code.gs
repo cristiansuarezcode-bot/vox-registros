@@ -16,7 +16,7 @@
 // Hoja de cálculo que sirve de base de datos (Registros Vox Corpus Danza, cuenta voxcorpusdanza@gmail.com).
 const HOJA_ID = '1XWxLoazHg4dCTqvaM0E2ZQYFzcL0XjNFcp_xQ4B51p0';
 const TZ = 'America/Bogota';
-const VERSION = '1.4.2';
+const VERSION = '1.5.0';
 const SESION_SEG = 6 * 60 * 60;          // máximo que permite CacheService
 const INTENTOS_MAX = 5;                  // claves erradas antes de bloquear
 const BLOQUEO_SEG = 15 * 60;
@@ -95,6 +95,7 @@ function salida_(obj) {
 const ACCIONES = {
   catalogos:           [catalogos_, false],
   registros:           [registros_, false],
+  resumen:             [resumen_, false],
   resumenDia:          [resumenDia_, false],
   reporteTienda:       [reporteTienda_, false],
   reporteSaldos:       [reporteSaldos_, false],
@@ -998,6 +999,55 @@ function resumenDia_(d) {
   };
 }
 
+// Lo que entró y salió en un rango de fechas, con filtro opcional por concepto.
+// "Tienda" junta las ventas cobradas y lo que pagan de los fiados (Cuenta tienda).
+// Solo cuenta plata real: lo pagado con saldo a favor no es plata que entra.
+const GRUPO_TIENDA = 'Tienda';
+function grupoIngreso_(concepto) { return norm_(concepto) === 'cuenta tienda' ? GRUPO_TIENDA : String(concepto || 'Otro'); }
+
+function resumen_(d) {
+  const rango = rango_(d);
+  const filtro = texto_(d.concepto);
+  const enR = f => esValido_(f) && enRango_(f.fecha, rango);
+  const pagos = tabla_(H.PAGOS).filas.filter(p => enR(p) && p.recibido_en);
+  const ventas = tabla_(H.VENTAS).filas.filter(v => enR(v) && esVentaCobrada_(v) && v.recibido_en);
+  const movs = [];
+  pagos.forEach(p => movs.push({ fecha: ymd_(p.fecha), grupo: grupoIngreso_(p.concepto), concepto: p.concepto, quien: p.estudiante || p.persona || '',
+    detalle: norm_(p.concepto) === 'cuenta tienda' ? (num_(p.valor) < 0 ? 'Devolución' : p.tipo === 'Cambio a favor' ? 'Cambio que quedó a favor' : 'Pago de fiado') : (p.tipo || ''),
+    valor: num_(p.valor), metodo: p.metodo, cuenta: p.recibido_en, id: p.id, hoja: H.PAGOS }));
+  const porVenta = {};
+  ventas.forEach(v => {
+    const x = porVenta[v.venta] || (porVenta[v.venta] = { fecha: ymd_(v.fecha), grupo: GRUPO_TIENDA, concepto: GRUPO_TIENDA, quien: v.estudiante || v.persona || '',
+      detalle: [], valor: 0, metodo: v.metodo, cuenta: v.recibido_en, id: v.venta, hoja: H.VENTAS });
+    x.valor += num_(v.total);
+    x.detalle.push((num_(v.cantidad) > 1 ? v.cantidad + ' ' : '') + v.producto);
+  });
+  Object.keys(porVenta).forEach(k => { const x = porVenta[k]; x.detalle = x.detalle.join(', '); movs.push(x); });
+  const entradas = movs.filter(m => !filtro || norm_(m.grupo) === norm_(filtro));
+  entradas.sort((a, b) => a.fecha < b.fecha ? 1 : a.fecha > b.fecha ? -1 : 0);
+  const sumar = (lista, campo) => { const o = {}; lista.forEach(m => { const k = m[campo] || '(sin dato)'; o[k] = (o[k] || 0) + m.valor; }); return o; };
+  const gastos = tabla_(H.GASTOS).filas.filter(enR);
+  const profes = tabla_(H.PAGO_PROFES).filas.filter(enR);
+  const tras = tabla_(H.TRASLADOS).filas.filter(enR);
+  const total = entradas.reduce((s, m) => s + m.valor, 0);
+  const salidas = filtro ? 0 : sum_(gastos, 'valor') + sum_(profes, 'total');
+  const caja = sum_(entradas.filter(m => m.cuenta === 'Caja'), 'valor') + (filtro ? 0 :
+    sum_(tras.filter(t => t.a === 'Caja'), 'valor') - sum_(tras.filter(t => t.de === 'Caja'), 'valor')
+    - sum_(gastos.filter(g => g.pagado_desde === 'Caja'), 'valor') - sum_(profes.filter(p => p.pagado_desde === 'Caja'), 'total'));
+  return {
+    desde: rango.desde, hasta: rango.hasta, concepto: filtro,
+    grupos: Object.keys(sumar(movs, 'grupo')).sort((a, b) => a.localeCompare(b, 'es')),
+    entradas: { total: total, cantidad: entradas.length, por_concepto: sumar(entradas, 'grupo'), por_cuenta: sumar(entradas, 'cuenta'),
+      por_metodo: sumar(entradas, 'metodo'), por_dia: sumar(entradas, 'fecha') },
+    salidas: filtro ? null : { total: salidas, gastos: sum_(gastos, 'valor'), por_categoria: agrupar_(gastos, 'categoria', 'valor'),
+      pago_profes: sum_(profes, 'total'), por_profe: agrupar_(profes, 'profe', 'total') },
+    neto: filtro ? null : total - salidas,
+    efectivo_neto_caja: caja,
+    traslados: filtro ? [] : tras.map(limpio_),
+    movimientos: entradas.slice(0, 1500),
+  };
+}
+
 function reporteTienda_(d) {
   const rango = rango_(d);
   const todas = tabla_(H.VENTAS).filas.filter(esValido_);
@@ -1542,6 +1592,39 @@ function correccionesRevision22oct() {
   return res.join('\n');
 }
 
+
+// ===================================================================== ajustes de cuentas 23/10
+
+/**
+ * Nequi: cuenta solo para la tienda (tipo "Tienda"). Cuenta Majo: vuelve a estar activa.
+ * Ejecutar una vez desde el editor. Si ya se hizo, no cambia nada.
+ */
+function ajustesCuentas23oct() {
+  nuevaLectura_();
+  const ses = { nombre: 'Ajustes de cuentas 23/10' };
+  const t = tabla_(H.CUENTAS);
+  const res = [];
+  const nequi = t.filas.find(f => norm_(f.nombre) === 'nequi');
+  if (!nequi) {
+    const c = { id: siguienteId_(H.CUENTAS, 'id', 'A', 2), nombre: 'Nequi', tipo: 'Tienda', activo: 'Sí', sugerida_dias: '' };
+    insertar_(H.CUENTAS, [c]);
+    bitacora_(ses, 'crearCuenta', H.CUENTAS, c.id, c);
+    res.push('Nequi creada (' + c.id + '), solo para la tienda');
+  } else if (String(nequi.tipo) !== 'Tienda' || norm_(nequi.activo) === 'no') {
+    actualizar_(t, nequi, { tipo: 'Tienda', activo: 'Sí' });
+    bitacora_(ses, 'editarCuenta', H.CUENTAS, nequi.id, { tipo: 'Tienda', activo: 'Sí' });
+    res.push('Nequi quedó activa y solo para la tienda');
+  } else res.push('Nequi ya estaba');
+  const majo = tabla_(H.CUENTAS).filas.find(f => norm_(f.nombre) === 'cuenta majo');
+  if (majo && norm_(majo.activo) === 'no') {
+    actualizar_(tabla_(H.CUENTAS), majo, { activo: 'Sí' });
+    bitacora_(ses, 'editarCuenta', H.CUENTAS, majo.id, { activo: 'Sí' });
+    res.push('Cuenta Majo activa otra vez');
+  } else res.push(majo ? 'Cuenta Majo ya estaba activa' : 'No encontré "Cuenta Majo"');
+  const msg = res.join('\n');
+  console.log(msg);
+  return msg;
+}
 
 // ===================================================================== estudiantes desde el admin (Supabase)
 /*

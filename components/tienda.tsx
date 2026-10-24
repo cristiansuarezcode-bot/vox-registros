@@ -2,7 +2,7 @@
 import { useMemo, useState } from 'react';
 import type { Quien } from '@/lib/tipos';
 import { hoy, norm, pesos } from '@/lib/util';
-import { BuscarQuien, Campo, Monto, Pantalla, Segmentado, cuentasBanco, datosQuien, useAccion, useApp, useSaldoFavor } from './ui';
+import { BuscarQuien, Campo, Monto, Pantalla, Segmentado, cuentasTienda, datosQuien, useAccion, useApp, useSaldoFavor } from './ui';
 
 export function Tienda() {
   const { cat, aviso, ir, recargarCat } = useApp();
@@ -11,7 +11,7 @@ export function Tienda() {
   const internos = (cat.listas.consumo_interno || []).map(String);
   const [carrito, setCarrito] = useState<Record<string, number>>({});
   const [metodo, setMetodo] = useState('Efectivo');
-  const [cuenta, setCuenta] = useState(cat.cuenta_sugerida);
+  const [cuenta, setCuenta] = useState(cuentasTienda(cat)[0] || '');
   const [quien, setQuien] = useState<Quien>(null);
   const [interno, setInterno] = useState('');
   const [fecha, setFecha] = useState(hoy());
@@ -123,7 +123,7 @@ export function Tienda() {
               )}
             </div>
           )}
-          {m === 'transferencia' && <div style={{ marginTop: 10 }}><Campo label="¿A qué cuenta?"><Segmentado opciones={cuentasBanco(cat).filter(c => c !== 'Caja')} valor={cuenta} onChange={setCuenta} /></Campo></div>}
+          {m === 'transferencia' && <div style={{ marginTop: 10 }}><Campo label="¿A qué cuenta?"><Segmentado opciones={cuentasTienda(cat)} valor={cuenta} onChange={setCuenta} /></Campo></div>}
           {m === 'fiado' && <div style={{ marginTop: 10 }} key={clave}><BuscarQuien valor={quien} onChange={setQuien} etiqueta="¿A quién se le fía?" /></div>}
           {conSaldo && <div style={{ marginTop: 10 }} key={'s' + clave}>
             <BuscarQuien valor={quien} onChange={setQuien} etiqueta="¿De quién es el saldo a favor?" />

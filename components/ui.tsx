@@ -226,8 +226,11 @@ export function BuscarQuien({ valor, onChange, permitirPersona = true, etiqueta 
     const t = norm(texto);
     if (!t) return [];
     const partes = t.split(' ');
-    return cat.estudiantes.filter(e => { const n = norm(e.nombre); return partes.every(p => n.includes(p)); }).slice(0, 8);
-  }, [texto, cat.estudiantes]);
+    const coincide = (nombre: string) => { const n = norm(nombre); return partes.every(p => n.includes(p)); };
+    // Los profes también salen (para fiarles en la tienda o registrar lo que pagan); quedan como "persona".
+    const profes = permitirPersona ? cat.profes.filter(p => coincide(p.nombre)).map(p => ({ id: 'profe:' + p.id, nombre: p.nombre, plan: '', profe: true })) : [];
+    return [...cat.estudiantes.filter(e => coincide(e.nombre)).map(e => ({ ...e, profe: false })), ...profes].slice(0, 8);
+  }, [texto, cat.estudiantes, cat.profes, permitirPersona]);
 
   useEffect(() => {
     const fuera = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setAbierto(false); };
@@ -240,7 +243,7 @@ export function BuscarQuien({ valor, onChange, permitirPersona = true, etiqueta 
       <Campo label={etiqueta}>
         <div className="elegido">
           <b>{valor.nombre}</b>
-          {!valor.estudiante_id && <span className="chip">Otra persona</span>}
+          {!valor.estudiante_id && <span className="chip">{cat.profes.some(p => norm(p.nombre) === norm(valor.persona || '')) ? 'Profe' : 'Otra persona'}</span>}
           <button type="button" className="enlace" onClick={() => { onChange(null); setTexto(''); }}>Cambiar</button>
         </div>
       </Campo>
@@ -261,7 +264,7 @@ export function BuscarQuien({ valor, onChange, permitirPersona = true, etiqueta 
 
   const elegir = (i: number) => {
     const e = resultados[i];
-    if (e) { onChange({ estudiante_id: e.id, nombre: e.nombre }); setAbierto(false); }
+    if (e) { onChange(e.profe ? { persona: e.nombre, nombre: e.nombre } : { estudiante_id: e.id, nombre: e.nombre }); setAbierto(false); }
   };
 
   const crear = async () => {
@@ -286,7 +289,7 @@ export function BuscarQuien({ valor, onChange, permitirPersona = true, etiqueta 
           <div className="sugerencias">
             {resultados.map((e, i) => (
               <button type="button" key={e.id} className={i === marcado ? 'marcado' : ''} onMouseDown={ev => ev.preventDefault()} onClick={() => elegir(i)}>
-                {e.nombre}{e.plan && <small>{e.plan}</small>}
+                {e.nombre}{e.profe ? <small>Profe</small> : e.plan && <small>{e.plan}</small>}
               </button>
             ))}
             {!resultados.length && <div className="vacio" style={{ padding: '10px 12px' }}>No aparece “{texto.trim()}”.
@@ -321,7 +324,14 @@ export function cuentaPorMetodo(metodo: string, cat: Catalogos) {
   return cat.cuenta_sugerida || cat.cuentas.find(c => c.nombre !== 'Caja')?.nombre || '';
 }
 
-export const cuentasBanco = (cat: Catalogos) => cat.cuentas.map(c => c.nombre);
+// Cuentas de la tienda (Nequi): ahí solo entra lo de la tienda, así que no salen para los demás pagos.
+const esDeTienda = (c: { tipo?: string }) => norm(c.tipo || '') === 'tienda';
+/** Cuentas para recibir pagos de la academia (sin las de la tienda). */
+export const cuentasBanco = (cat: Catalogos) => cat.cuentas.filter(c => !esDeTienda(c)).map(c => c.nombre);
+/** Cuentas a las que se transfiere lo de la tienda (si no hay ninguna marcada, las de banco). */
+export const cuentasTienda = (cat: Catalogos) => { const t = cat.cuentas.filter(esDeTienda).map(c => c.nombre); return t.length ? t : cuentasBanco(cat).filter(c => c !== 'Caja'); };
+/** Todas las cuentas activas, para salidas de plata y traslados. */
+export const cuentasTodas = (cat: Catalogos) => cat.cuentas.map(c => c.nombre);
 
 
 // ------------------------------------------------------------------ descuentos
@@ -418,7 +428,7 @@ export function DevolverSaldo({ q, item, onCerrar, onListo }: { q: Quien; item: 
         <Campo label="Valor a devolver"><Monto valor={valor} onChange={setValor} /></Campo>
         <Campo label="Fecha"><input type="date" value={fecha} max={hoy()} onChange={e => setFecha(e.target.value)} /></Campo>
         <Campo label="¿Cómo se le devolvió?" ancho><Segmentado opciones={metodos} valor={metodo} onChange={m => { setMetodo(m); setDesde(cuentaPorMetodo(m, cat)); }} /></Campo>
-        <Campo label="¿De dónde salió la plata?" ancho><Segmentado opciones={cuentasBanco(cat)} valor={desde} onChange={setDesde} /></Campo>
+        <Campo label="¿De dónde salió la plata?" ancho><Segmentado opciones={cuentasTodas(cat)} valor={desde} onChange={setDesde} /></Campo>
         <Campo label="Nota (opcional)" ancho><input value={nota} onChange={e => setNota(e.target.value)} placeholder="Ej: se le devolvió a la mamá" /></Campo>
       </div>
       {valor > item.favor && <p className="aviso error">No puede ser más de {pesos(item.favor)}.</p>}
