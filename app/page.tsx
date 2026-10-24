@@ -8,6 +8,7 @@ import { Gasto, PagoProfe, RegistrarPago, Traslado } from '@/components/registra
 import { Tienda } from '@/components/tienda';
 import { Uniformes } from '@/components/uniformes';
 import { Cuentas, Ficha, Historial, Hoy, ReporteProfes, ReporteTienda, Saldos } from '@/components/consultas';
+import { CierreCaja } from '@/components/cierre';
 
 
 const VISTAS: Record<string, () => ReactNode> = {
@@ -29,6 +30,7 @@ const VISTAS: Record<string, () => ReactNode> = {
   cuenta: () => <Cuenta />,
   profes: () => <Profes />,
   descuentos: () => <Descuentos />,
+  cierre: () => <CierreCaja />,
 };
 
 function leerHash() {
@@ -149,6 +151,7 @@ const REGISTRAR = [
   { v: 'profe', i: '🧑‍🏫', t: 'Pago a profe', s: 'Clases del periodo' },
   { v: 'gasto', i: '🧾', t: 'Gasto', s: 'Compras y pagos' },
   { v: 'traslado', i: '🔁', t: 'Traslado', s: 'Entre cuentas o a caja' },
+  { v: 'cierre', i: '🧮', t: 'Cierre de caja', s: 'Contar, cuadrar y entregar' },
 ];
 const ADMINISTRAR = [
   { v: 'estudiantes', i: '🎓', t: 'Estudiantes y planes', s: 'Agregar, editar y asignar plan' },

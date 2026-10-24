@@ -412,7 +412,7 @@ function FichaDe({ id }: { id: string }) {
 }
 
 // ------------------------------------------------------------------ cuentas
-type RepCuentas = { cuentas: { cuenta: string; saldo_total: number; entradas: number; salidas: number }[]; movimientos: { fecha: string; cuenta: string; valor: number; tipo: string; detalle: string; id: string }[] };
+type RepCuentas = { cuentas: { cuenta: string; saldo_total: number; entradas: number; salidas: number; segun_cierre?: string }[]; movimientos: { fecha: string; cuenta: string; valor: number; tipo: string; detalle: string; id: string }[] };
 export function Cuentas() {
   const [desde, setDesde] = useState(primeroDelMes());
   const [hasta, setHasta] = useState(hoy());
@@ -427,7 +427,7 @@ export function Cuentas() {
       {d && <>
         <div className="tarjeta"><div className="tabla-envoltura"><table className="tabla">
           <thead><tr><th>Cuenta</th><th className="num">Entradas</th><th className="num">Salidas</th><th className="num">Saldo acumulado</th></tr></thead>
-          <tbody>{d.cuentas.map(c => <tr key={c.cuenta}><td><button className="enlace" onClick={() => setCuenta(c.cuenta === cuenta ? '' : c.cuenta)}>{c.cuenta}</button></td><td className="num">{pesos(c.entradas)}</td><td className="num">{pesos(c.salidas)}</td><td className="num"><b>{pesos(c.saldo_total)}</b></td></tr>)}</tbody>
+          <tbody>{d.cuentas.map(c => <tr key={c.cuenta}><td><button className="enlace" onClick={() => setCuenta(c.cuenta === cuenta ? '' : c.cuenta)}>{c.cuenta}</button></td><td className="num">{pesos(c.entradas)}</td><td className="num">{pesos(c.salidas)}</td><td className="num"><b>{pesos(c.saldo_total)}</b>{c.segun_cierre && <><br /><small className="suave">según el cierre del {fechaCorta(c.segun_cierre)}</small></>}</td></tr>)}</tbody>
         </table></div>
         <p className="suave" style={{ fontSize: 13, marginBottom: 0 }}>El saldo acumulado cuenta todo lo registrado aquí desde la migración. Lo de antes que quedó como “Sin dato” no se sabe a qué cuenta entró.</p></div>
         <div className="tarjeta"><h3>Movimientos{cuenta ? ` · ${cuenta}` : ''} {cuenta && <button className="enlace" onClick={() => setCuenta('')}>(ver todas)</button>}</h3>

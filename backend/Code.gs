@@ -16,7 +16,7 @@
 // Hoja de cálculo que sirve de base de datos (Registros Vox Corpus Danza, cuenta voxcorpusdanza@gmail.com).
 const HOJA_ID = '1XWxLoazHg4dCTqvaM0E2ZQYFzcL0XjNFcp_xQ4B51p0';
 const TZ = 'America/Bogota';
-const VERSION = '1.5.0';
+const VERSION = '1.6.0';
 const SESION_SEG = 6 * 60 * 60;          // máximo que permite CacheService
 const INTENTOS_MAX = 5;                  // claves erradas antes de bloquear
 const BLOQUEO_SEG = 15 * 60;
@@ -26,7 +26,7 @@ const H = {
   PRENDAS: 'Prendas del pedido', PAGO_PROFES: 'Pago profes', GASTOS: 'Gastos', TRASLADOS: 'Traslados',
   ESTUDIANTES: 'Estudiantes', PRODUCTOS: 'Productos', CAT_PRENDAS: 'Prendas uniforme', CONCEPTOS: 'Conceptos',
   PROFES: 'Profes', CUENTAS: 'Cuentas', LISTAS: 'Listas', USUARIOS: 'Usuarios', BITACORA: 'Bitácora',
-  INVENTARIO: 'Inventario', PLANES: 'Planes', DESCUENTOS: 'Descuentos',
+  INVENTARIO: 'Inventario', PLANES: 'Planes', DESCUENTOS: 'Descuentos', CIERRES: 'Cierres caja',
 };
 const SALDO_FAVOR = 'Saldo a favor';
 const CAMBIO_NO_DEVUELTO = 'Cambio no devuelto';
@@ -37,6 +37,9 @@ const HOJAS_NUEVAS = {
     'registrado_por', 'registrado_en', 'estado', 'motivo_anulacion', 'anulado_por', 'anulado_en'],
   'Planes': ['id', 'nombre', 'valor_mensual', 'activo', 'nota'],
   'Descuentos': ['id', 'nombre', 'tipo', 'valor', 'aplica_a', 'activo', 'nota'],
+  'Cierres caja': ['id', 'fecha', 'base_inicial', 'entradas', 'salidas', 'esperado', 'contado', 'diferencia', 'entregado',
+    'entregado_a', 'cuenta_destino', 'base_siguiente', 'nota', 'registrado_por', 'registrado_en', 'estado', 'motivo_anulacion',
+    'anulado_por', 'anulado_en'],
 };
 // Filas con que nace una pestaña nueva.
 const SEMILLAS = {
@@ -47,7 +50,7 @@ const TIPOS_INVENTARIO = ['Entrada', 'Conteo', 'Salida'];
 // Hojas de registros que se pueden anular. "grupo" = columna que junta varias líneas de un mismo registro.
 const ANULABLES = {
   'Pagos': null, 'Cargos': null, 'Ventas tienda': 'venta', 'Pedidos uniforme': null,
-  'Pago profes': 'pago', 'Gastos': null, 'Traslados': null, 'Inventario': null,
+  'Pago profes': 'pago', 'Gastos': null, 'Traslados': null, 'Inventario': null, 'Cierres caja': null,
 };
 
 // Columnas que configurar() agrega si la hoja no las tiene.
@@ -96,6 +99,8 @@ const ACCIONES = {
   catalogos:           [catalogos_, false],
   registros:           [registros_, false],
   resumen:             [resumen_, false],
+  previaCierre:        [previaCierre_, false],
+  cerrarCaja:          [cerrarCaja_, true],
   resumenDia:          [resumenDia_, false],
   reporteTienda:       [reporteTienda_, false],
   reporteSaldos:       [reporteSaldos_, false],
@@ -522,6 +527,10 @@ function anular_(d, ses) {
   const filas = t.filas.filter(f => f.id === d.id || (grupo && f[grupo] === d.id));
   if (!filas.length) throw err_('No encontré el registro ' + d.id);
   if (!filas.some(esValido_)) throw err_('Ese registro ya estaba anulado.');
+  if (hoja === H.CIERRES) {
+    const cs = cierresValidos_();
+    if (!cs.length || cs[cs.length - 1].id !== d.id) throw err_('Solo se puede anular el último cierre de caja. Anula primero los más recientes.');
+  }
   if (hoja === H.PAGOS && filas.some(f => f.tipo === 'Saldo usado' && f.relacionado))
     throw err_('Este movimiento es parte de un pago con saldo a favor (' + filas[0].relacionado + '). Anula ese pago y se devuelve todo.');
   const ahora = new Date();
@@ -1153,6 +1162,8 @@ function reporteCuentas_(d) {
     c.saldo_total += m.valor;
     if (enRango_(m.fecha, rango)) { if (m.valor > 0) c.entradas += m.valor; else c.salidas -= m.valor; }
   });
+  const caja = cajaSegunCierre_();
+  if (caja && cuentas['Caja']) { cuentas['Caja'].saldo_total = caja.saldo; cuentas['Caja'].segun_cierre = caja.desde; }
   return { desde: rango.desde, hasta: rango.hasta, cuentas: Object.keys(cuentas).map(k => cuentas[k]),
     movimientos: mov.filter(m => enRango_(m.fecha, rango)).map(m => Object.assign({}, m, { fecha: ymd_(m.fecha) })).reverse().slice(0, 500) };
 }
@@ -1166,6 +1177,13 @@ function movimientos_() {
   tabla_(H.TRASLADOS).filas.filter(esValido_).forEach(t => {
     m.push({ fecha: t.fecha, cuenta: t.de, valor: -num_(t.valor), tipo: 'Traslado', detalle: 'A ' + t.a, id: t.id });
     m.push({ fecha: t.fecha, cuenta: t.a, valor: num_(t.valor), tipo: 'Traslado', detalle: 'De ' + t.de, id: t.id });
+  });
+  cierresValidos_().forEach(c => {
+    if (num_(c.diferencia)) m.push({ fecha: c.fecha, cuenta: 'Caja', valor: num_(c.diferencia), tipo: 'Arqueo', detalle: (num_(c.diferencia) > 0 ? 'Sobrante' : 'Faltante') + ' al cerrar: ' + (c.nota || ''), id: c.id });
+    if (num_(c.entregado)) {
+      m.push({ fecha: c.fecha, cuenta: 'Caja', valor: -num_(c.entregado), tipo: 'Cierre de caja', detalle: 'Entregado a ' + c.entregado_a + (c.cuenta_destino ? ' (' + c.cuenta_destino + ')' : ''), id: c.id });
+      if (c.cuenta_destino) m.push({ fecha: c.fecha, cuenta: c.cuenta_destino, valor: num_(c.entregado), tipo: 'Cierre de caja', detalle: 'Consignación de la caja', id: c.id });
+    }
   });
   return m.filter(x => x.cuenta).sort((a, b) => ymd_(a.fecha) < ymd_(b.fecha) ? -1 : 1);
 }
@@ -1892,4 +1910,135 @@ function activarSincronizacionAuto() {
   ScriptApp.getProjectTriggers().filter(t => t.getHandlerFunction() === 'sincronizarAdminAuto').forEach(t => ScriptApp.deleteTrigger(t));
   ScriptApp.newTrigger('sincronizarAdminAuto').timeBased().everyMinutes(15).create();
   console.log('Listo: los estudiantes del admin se traen cada 15 minutos.');
+}
+
+
+// ===================================================================== cierre de caja (arqueo)
+/*
+ * Al final del día Majo cuenta la caja. La página calcula cuánto debería haber:
+ *   base con la que arrancó (la que dejó el cierre anterior) + efectivo que entró − efectivo que salió.
+ * Se entrega una cifra cerrada (por defecto a miles) y lo que queda, que nunca baja de la base mínima,
+ * es la base del día siguiente.
+ *
+ * Qué movimientos le tocan a un cierre: los de la caja con fecha hasta la del cierre que no hayan
+ * quedado en el cierre anterior. Un movimiento quedó en el cierre anterior si se registró antes que ese
+ * cierre y su fecha no es posterior a la de ese cierre. Así, lo que se registra tarde (después de cerrar)
+ * entra en el siguiente cierre, que es cuando esa plata se cuenta.
+ */
+const BASE_MINIMA_CAJA = 100000;
+const REDONDEO_ENTREGA = 1000;
+const ENTREGAS_CAJA = ['Cristian', 'Liz', 'Consignación'];
+
+function cierresValidos_() {
+  if (!hojaExiste_(H.CIERRES)) return [];
+  return tabla_(H.CIERRES).filas.filter(c => c.id && esValido_(c))
+    .sort((a, b) => tiempo_(a.registrado_en) - tiempo_(b.registrado_en));
+}
+
+// Movimientos de efectivo de la caja que le tocan a un cierre con fecha "hasta" (yyyy-MM-dd).
+function movimientosCaja_(prev, hasta) {
+  const prevF = prev ? ymd_(prev.fecha) : null;
+  const prevT = prev ? tiempo_(prev.registrado_en) : 0;
+  const toca = f => {
+    if (!esValido_(f) || !f.fecha) return false;
+    const fe = ymd_(f.fecha);
+    if (fe > hasta) return false;
+    if (!prev) return fe === hasta;           // primer cierre: solo lo del día
+    return !(tiempo_(f.registrado_en) <= prevT && fe <= prevF);
+  };
+  const m = [];
+  const add = (f, tipo, detalle, valor) => m.push({ fecha: ymd_(f.fecha), tipo: tipo, detalle: detalle, valor: valor, id: f.id });
+  tabla_(H.PAGOS).filas.filter(p => toca(p) && p.recibido_en === 'Caja').forEach(p =>
+    add(p, num_(p.valor) < 0 ? 'Devoluciones' : (norm_(p.concepto) === 'cuenta tienda' ? 'Tienda' : 'Pagos'),
+      p.concepto + ' – ' + (p.estudiante || p.persona || ''), num_(p.valor)));
+  const ventas = {};
+  tabla_(H.VENTAS).filas.filter(v => toca(v) && esVentaCobrada_(v) && v.recibido_en === 'Caja').forEach(v => {
+    const x = ventas[v.venta] || (ventas[v.venta] = { f: v, valor: 0, prods: [] });
+    x.valor += num_(v.total); x.prods.push(v.producto);
+  });
+  Object.keys(ventas).forEach(k => add(ventas[k].f, 'Tienda', 'Venta ' + k + ': ' + ventas[k].prods.join(', '), ventas[k].valor));
+  tabla_(H.TRASLADOS).filas.filter(toca).forEach(t => {
+    if (t.a === 'Caja') add(t, 'Traslados a la caja', 'De ' + t.de, num_(t.valor));
+    if (t.de === 'Caja') add(t, 'Traslados desde la caja', 'A ' + t.a, -num_(t.valor));
+  });
+  tabla_(H.GASTOS).filas.filter(g => toca(g) && g.pagado_desde === 'Caja').forEach(g => add(g, 'Gastos', g.descripcion, -num_(g.valor)));
+  tabla_(H.PAGO_PROFES).filas.filter(p => toca(p) && p.pagado_desde === 'Caja').forEach(p => add(p, 'Pagos a profes', p.profe + ' – ' + p.periodo, -num_(p.total)));
+  m.sort((a, b) => a.fecha < b.fecha ? -1 : a.fecha > b.fecha ? 1 : 0);
+  const entradas = m.filter(x => x.valor > 0), salidas = m.filter(x => x.valor < 0);
+  const porTipo = l => { const o = {}; l.forEach(x => o[x.tipo] = (o[x.tipo] || 0) + x.valor); return o; };
+  return { movimientos: m, entradas: sum_(entradas, 'valor'), salidas: -sum_(salidas, 'valor'),
+    neto: sum_(m, 'valor'), por_tipo_entradas: porTipo(entradas), por_tipo_salidas: porTipo(salidas) };
+}
+
+function entregaSugerida_(contado) {
+  return Math.max(0, Math.floor((contado - BASE_MINIMA_CAJA) / REDONDEO_ENTREGA) * REDONDEO_ENTREGA);
+}
+
+function cierreLimpio_(c) {
+  return { id: c.id, fecha: ymd_(c.fecha), base_inicial: num_(c.base_inicial), entradas: num_(c.entradas), salidas: num_(c.salidas),
+    esperado: num_(c.esperado), contado: num_(c.contado), diferencia: num_(c.diferencia), entregado: num_(c.entregado),
+    entregado_a: c.entregado_a || '', cuenta_destino: c.cuenta_destino || '', base_siguiente: num_(c.base_siguiente),
+    nota: c.nota || '', registrado_por: c.registrado_por || '', registrado_en: limpio_({ x: c.registrado_en }).x || '' };
+}
+
+/** Lo que hay que mostrar antes de cerrar la caja de un día. No escribe nada. */
+function previaCierre_(d) {
+  if (!hojaExiste_(H.CIERRES)) throw err_('Falta la pestaña de cierres: ejecuta "configurar" en Apps Script.');
+  const fecha = ymd_(fecha_(d.fecha));
+  const cierres = cierresValidos_();
+  const ya = cierres.find(c => ymd_(c.fecha) === fecha);
+  const historial = cierres.slice(-15).reverse().map(cierreLimpio_);
+  const ultimo = cierres[cierres.length - 1] || null;
+  if (ya) return { fecha: fecha, cerrado: cierreLimpio_(ya), es_el_ultimo: ultimo && ultimo.id === ya.id, historial: historial,
+    base_minima: BASE_MINIMA_CAJA, redondeo: REDONDEO_ENTREGA };
+  if (ultimo && ymd_(ultimo.fecha) > fecha) throw err_('Ya hay un cierre más reciente (' + ymd_(ultimo.fecha) + '). Escoge una fecha desde ese día en adelante.');
+  const mov = movimientosCaja_(ultimo, fecha);
+  return {
+    fecha: fecha, cerrado: null, primer_cierre: !ultimo,
+    anterior: ultimo ? cierreLimpio_(ultimo) : null,
+    base_inicial: ultimo ? num_(ultimo.base_siguiente) : null,
+    movimientos: mov.movimientos, entradas: mov.entradas, salidas: mov.salidas, neto: mov.neto,
+    por_tipo_entradas: mov.por_tipo_entradas, por_tipo_salidas: mov.por_tipo_salidas,
+    base_minima: BASE_MINIMA_CAJA, redondeo: REDONDEO_ENTREGA, entregas: ENTREGAS_CAJA, historial: historial,
+  };
+}
+
+function cerrarCaja_(d, ses) {
+  const p = previaCierre_(d);
+  if (p.cerrado) throw err_('La caja del ' + p.fecha + ' ya se cerró. Si hay que corregirlo, anula ese cierre y vuelve a hacerlo.', 'duplicado');
+  const base = p.primer_cierre ? monto_(d.base_inicial, true) : p.base_inicial;
+  if (p.primer_cierre && base < 0) throw err_('Escribe con cuánta base arrancó la caja.');
+  const esperado = base + p.neto;
+  const contado = monto_(d.contado, true);
+  const diferencia = contado - esperado;
+  const nota = texto_(d.nota);
+  if (diferencia !== 0 && nota.length < 5) throw err_('La caja no cuadra (' + (diferencia > 0 ? 'sobran ' : 'faltan ') + pesos_(Math.abs(diferencia)) + '). Escribe una nota explicando qué pasó.');
+  const entregado = d.entregado === undefined || d.entregado === '' ? 0 : monto_(d.entregado, true);
+  if (entregado > contado) throw err_('No se puede entregar más de lo que hay en la caja.');
+  const baseSig = contado - entregado;
+  if (entregado > 0 && baseSig < BASE_MINIMA_CAJA) throw err_('Con esa entrega la caja queda con ' + pesos_(baseSig) + ', menos que la base mínima de ' + pesos_(BASE_MINIMA_CAJA) + '.');
+  let a = '', cuenta = '';
+  if (entregado > 0) {
+    a = ENTREGAS_CAJA.find(x => norm_(x) === norm_(d.entregado_a));
+    if (!a) throw err_('¿A quién se le entregó la plata? Escoge Cristian, Liz o Consignación.');
+    if (a === 'Consignación') {
+      cuenta = cuentaActiva_(d.cuenta_destino, 'cuenta donde se consignó');
+      if (cuenta === 'Caja') throw err_('Escoge la cuenta donde se consignó.');
+    }
+  }
+  const c = auditar_({ id: siguienteId_(H.CIERRES, 'id', 'CC', 4), fecha: fecha_(p.fecha), base_inicial: base, entradas: p.entradas,
+    salidas: p.salidas, esperado: esperado, contado: contado, diferencia: diferencia, entregado: entregado, entregado_a: a,
+    cuenta_destino: cuenta, base_siguiente: baseSig, nota: nota }, ses);
+  insertar_(H.CIERRES, [c]);
+  bitacora_(ses, 'cerrarCaja', H.CIERRES, c.id, { fecha: p.fecha, esperado: esperado, contado: contado, diferencia: diferencia, entregado: entregado, a: a + (cuenta ? ' (' + cuenta + ')' : ''), base_siguiente: baseSig });
+  return { id: c.id, fecha: p.fecha, diferencia: diferencia, entregado: entregado, base_siguiente: baseSig };
+}
+
+// Saldo real de la caja: la base del último cierre más lo que ha pasado después. null si nunca se ha cerrado.
+function cajaSegunCierre_() {
+  const cierres = cierresValidos_();
+  const ultimo = cierres[cierres.length - 1];
+  if (!ultimo) return null;
+  const mov = movimientosCaja_(ultimo, ymd_(new Date()));
+  return { saldo: num_(ultimo.base_siguiente) + mov.neto, desde: ymd_(ultimo.fecha) };
 }
