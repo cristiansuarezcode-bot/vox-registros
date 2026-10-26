@@ -320,3 +320,27 @@ table.tabla { width: 100%; border-collapse: collapse; font-size: 14px; }
 .abonos li span:last-child { font-variant-numeric: tabular-nums; color: var(--texto, inherit); }
 .costo-acciones { display: flex; gap: 8px; margin-top: 8px; }
 .costos-detalle > .btn { margin-top: 10px; }
+
+/* informe de ganancias de los montajes */
+.vista-montajes { margin-bottom: 14px; }
+.cifra small { display: block; font-size: 12px; margin-top: 4px; color: var(--suave); line-height: 1.35; }
+.cifra.destacada small { color: #f0d6dc; }
+.cifra b.negativo, .informe-cols b.negativo { color: var(--error); }
+.cifra.destacada b.negativo { color: #ffd3d3; }
+.cuentas-informe { display: grid; grid-template-columns: 1fr auto; gap: 6px 12px; margin: 0; font-size: 15px; }
+.cuentas-informe dt { color: var(--suave); }
+.cuentas-informe dd { margin: 0; text-align: right; font-weight: 600; font-variant-numeric: tabular-nums; }
+.cuentas-informe dd.debe { color: var(--aviso); }
+.cuentas-informe dt:nth-of-type(4), .cuentas-informe dd:nth-of-type(4) { border-top: 1px solid var(--linea); padding-top: 6px; }
+.aviso-informe { margin: 12px 0 0; padding: 10px 12px; background: var(--aviso-fondo); color: var(--aviso); border-radius: var(--radio); font-size: 14px; }
+.orden-informe { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 4px 0 12px; font-size: 14px; }
+.orden-informe .segmentado button { min-height: 34px; padding: 5px 10px; font-size: 14px; }
+.informe-grupos { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; align-items: start; margin-bottom: 12px; }
+.informe-grupos .tarjeta { margin: 0; }
+.informe-cabeza { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; margin-bottom: 10px; }
+.informe-cols { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 10px; }
+.informe-cols > div { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.informe-cols span { font-size: 11px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: var(--suave); }
+.informe-cols b { font-size: 15px; font-variant-numeric: tabular-nums; }
+.informe-cols small { font-size: 12px; color: var(--suave); }
+.informe-grupo .avance { margin: 0 0 4px; }

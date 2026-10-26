@@ -15,13 +15,16 @@ export function Montajes() {
   const { d, error, cargando, recargar } = useDatos<Lista>('listarMontajes', {}, []);
   const [editar, setEditar] = useState<Montaje | 'nuevo' | null>(null);
   const [verArchivados, setVerArchivados] = useState(false);
+  const [vista, setVista] = useState<'Grupos' | 'Ganancias'>('Grupos');
   const activos = (d?.montajes || []).filter(m => m.activo);
   const archivados = (d?.montajes || []).filter(m => !m.activo);
   return (
     <Pantalla titulo="Montajes de la clausura" sub="Cada grupo con sus integrantes. El cargo de vestuario de cada estudiante se calcula solo con sus montajes">
       {error && <ErrorCaja msg={error} reintentar={recargar} />}
       {cargando && !d && <Cargando texto="Cargando montajes…" />}
-      {d && <>
+      {d?.es_director && <div className="vista-montajes"><Segmentado opciones={['Grupos', 'Ganancias'] as const} valor={vista} onChange={setVista} /></div>}
+      {d && d.es_director && vista === 'Ganancias' && <Ganancias d={d} />}
+      {d && !(d.es_director && vista === 'Ganancias') && <>
         <div className="cifras">
           <div className="cifra destacada"><span>Montajes</span><b>{activos.length}</b></div>
           <div className="cifra"><span>Integrantes</span><b>{activos.reduce((s, m) => s + m.cantidad, 0)}</b></div>
@@ -351,4 +354,68 @@ function AbonarCosto({ m, c, onCerrar, onListo }: { m: Montaje; c: Costo; onCerr
       {desde === 'Caja' && <p className="ayuda" style={{ marginTop: 8 }}>Sale de la caja: va a aparecer en el cierre del día como un gasto.</p>}
     </Modal>
   );
+}
+
+// ------------------------------------------------------------------ informe de ganancias (solo directores)
+type Fila = { id: string; nombre: string; activo: boolean; integrantes: number; esperado: number; recogido: number; por_cobrar: number;
+  costo: number; pagado: number; debe: number; con_costo: boolean; ganancia_esperada: number; ganancia_hoy: number };
+
+const filaDe = (m: Montaje): Fila => {
+  const cs = m.costos || [];
+  const costo = cs.reduce((s, c) => s + c.valor, 0), pagado = cs.reduce((s, c) => s + c.pagado, 0);
+  return { id: m.id, nombre: m.nombre, activo: m.activo, integrantes: m.cantidad, esperado: m.esperado, recogido: m.recogido, por_cobrar: m.por_cobrar,
+    costo, pagado, debe: costo - pagado, con_costo: cs.length > 0, ganancia_esperada: m.esperado - costo, ganancia_hoy: m.recogido - pagado };
+};
+const porcentaje = (g: number, base: number) => (base > 0 ? `${Math.round(g * 100 / base)}%` : '');
+
+function Ganancias({ d }: { d: Lista }) {
+  // Los archivados cuentan si tienen costos: lo que se le pagó al proveedor no puede desaparecer del total.
+  const filas = d.montajes.filter(m => m.activo || (m.costos || []).length).map(filaDe);
+  const [orden, setOrden] = useState<'Ganancia' | 'Nombre' | 'Falta cobrar'>('Ganancia');
+  const ordenadas = filas.slice().sort((a, b) => orden === 'Nombre' ? a.nombre.localeCompare(b.nombre, 'es')
+    : orden === 'Falta cobrar' ? b.por_cobrar - a.por_cobrar : (Number(b.con_costo) - Number(a.con_costo)) || b.ganancia_esperada - a.ganancia_esperada);
+  const t = filas.reduce((s, f) => ({ esperado: s.esperado + f.esperado, recogido: s.recogido + f.recogido, por_cobrar: s.por_cobrar + f.por_cobrar,
+    costo: s.costo + f.costo, pagado: s.pagado + f.pagado, debe: s.debe + f.debe }), { esperado: 0, recogido: 0, por_cobrar: 0, costo: 0, pagado: 0, debe: 0 });
+  const sinCosto = filas.filter(f => !f.con_costo && f.esperado > 0);
+  const gEsperada = t.esperado - t.costo, gHoy = t.recogido - t.pagado;
+  return <>
+    <div className="cifras">
+      <div className="cifra destacada"><span>Ganancia esperada</span><b className={gEsperada < 0 ? 'negativo' : ''}>{pesos(gEsperada)}</b><small>Cuando todos paguen y se pague todo el vestuario{t.esperado > 0 && ` · ${porcentaje(gEsperada, t.esperado)}`}</small></div>
+      <div className="cifra"><span>Ganancia hoy</span><b className={gHoy < 0 ? 'negativo' : ''}>{pesos(gHoy)}</b><small>Lo recogido menos lo ya pagado a proveedores</small></div>
+    </div>
+    <div className="tarjeta informe-total">
+      <h3 className="mt0">Total de la clausura</h3>
+      <dl className="cuentas-informe">
+        <dt>Debería recoger</dt><dd>{pesos(t.esperado)}</dd>
+        <dt>Recogido</dt><dd>{pesos(t.recogido)}</dd>
+        <dt>Falta por cobrar</dt><dd className={t.por_cobrar > 0 ? 'debe' : ''}>{pesos(t.por_cobrar)}</dd>
+        <dt>Costo de los vestuarios</dt><dd>{pesos(t.costo)}</dd>
+        <dt>Pagado a proveedores</dt><dd>{pesos(t.pagado)}</dd>
+        <dt>Falta pagar a proveedores</dt><dd className={t.debe > 0 ? 'debe' : ''}>{pesos(t.debe)}</dd>
+      </dl>
+      {sinCosto.length > 0 && <p className="aviso-informe">⚠ {sinCosto.length === 1 ? `${sinCosto[0].nombre} no tiene costo registrado, así que la ganancia sale más alta de lo real.` : `${sinCosto.length} grupos no tienen costo registrado, así que la ganancia sale más alta de lo real: ${sinCosto.map(f => f.nombre).join(', ')}.`}</p>}
+      {(d.pagado_de_mas > 0 || d.pagos_sin_montaje > 0) && <p className="suave" style={{ fontSize: 13, margin: '8px 0 0' }}>
+        No se cuentan aquí: {[d.pagado_de_mas > 0 && `${pesos(d.pagado_de_mas)} pagados de más (a favor de los estudiantes)`, d.pagos_sin_montaje > 0 && `${pesos(d.pagos_sin_montaje)} de quienes aún no tienen montaje`].filter(Boolean).join(' y ')}.
+      </p>}
+    </div>
+    <div className="orden-informe"><span className="suave">Ordenar por</span><Segmentado opciones={['Ganancia', 'Falta cobrar', 'Nombre'] as const} valor={orden} onChange={setOrden} /></div>
+    <div className="informe-grupos">
+      {ordenadas.map(f => (
+        <div key={f.id} className="tarjeta informe-grupo">
+          <div className="informe-cabeza">
+            <span><b>{f.nombre}</b><small className="suave"> · {f.integrantes} integrante(s){!f.activo && ' · archivado'}</small></span>
+            {!f.con_costo ? <span className="chip">Sin costo</span> : <span className={`chip ${f.ganancia_esperada < 0 ? 'anulado' : 'ok'}`}>{pesos(f.ganancia_esperada)}</span>}
+          </div>
+          <div className="informe-cols">
+            <div><span>Recoger</span><b>{pesos(f.esperado)}</b><small>Recogido {pesos(f.recogido)}</small></div>
+            <div><span>Costo</span><b>{f.con_costo ? pesos(f.costo) : '—'}</b><small>{f.con_costo ? (f.debe > 0 ? `Debemos ${pesos(f.debe)}` : 'Pagado') : 'Sin registrar'}</small></div>
+            <div><span>Ganancia</span><b className={f.ganancia_esperada < 0 ? 'negativo' : ''}>{pesos(f.ganancia_esperada)}</b><small>Hoy {pesos(f.ganancia_hoy)}</small></div>
+          </div>
+          {f.esperado > 0 && f.con_costo && <div className="avance" title={`Margen ${porcentaje(f.ganancia_esperada, f.esperado)}`}><span style={{ width: `${Math.max(0, Math.min(100, f.ganancia_esperada * 100 / f.esperado))}%` }} /></div>}
+          {f.esperado > 0 && f.con_costo && <small className="suave">Margen {porcentaje(f.ganancia_esperada, f.esperado)} de lo que se recoge</small>}
+        </div>
+      ))}
+    </div>
+    <p className="suave" style={{ fontSize: 13 }}>“Ganancia” es lo que queda cuando todos paguen y se le pague todo al proveedor. “Hoy” es la plata que ya entró menos la que ya se le pagó al proveedor.</p>
+  </>;
 }
