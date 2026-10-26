@@ -231,6 +231,20 @@ table.tabla { width: 100%; border-collapse: collapse; font-size: 14px; }
 .fila-dos .segmentado { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .fila-dos .segmentado button { padding: 8px 6px; font-size: 14px; line-height: 1.2; white-space: normal; min-height: 48px; }
 .ver-mas { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 12px; font-size: 13px; }
+.montajes { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 14px; align-items: start; }
+.montajes .tarjeta { margin: 0; }
+.montaje-cabeza { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; margin-bottom: 10px; }
+.montaje-cabeza h3 { margin-bottom: 2px; }
+.montaje-cabeza .suave { font-size: 14px; }
+.montaje-datos { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 12px; }
+.montaje-datos > div { display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; background: var(--fondo); border-radius: var(--radio); }
+.montaje-datos span { font-size: 11px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: var(--suave); }
+.montaje-datos b { font-size: 20px; font-variant-numeric: tabular-nums; }
+.lista-simple.integrantes li, .lista-simple.por-asignar li { align-items: center; }
+.por-asignar li { flex-wrap: wrap; gap: 8px; }
+.fila-asignar { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.fila-asignar .campo { margin: 0; min-width: 150px; }
+.fila-asignar select { min-height: 36px; padding: 6px 8px; font-size: 14px; }
 .fila-dato { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; padding: 8px 0; }
 .fila-dato b { font-size: 20px; font-variant-numeric: tabular-nums; }
 .conteo { margin-top: 12px; display: grid; gap: 6px; }

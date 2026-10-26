@@ -152,7 +152,7 @@ export function Hoy() {
 }
 
 // ------------------------------------------------------------------ saldos y cargos
-type FilaSaldo = { quien: string; estudiante_id: string; cantidad?: number; valor: number; pagado: number; saldo: number; estado: string; cargo?: string; sin_cargo?: boolean; pedido?: string; fecha?: string; prendas_pendientes?: string[] };
+type FilaSaldo = { quien: string; estudiante_id: string; cantidad?: number; montajes?: string; valor: number; pagado: number; saldo: number; estado: string; cargo?: string; sin_cargo?: boolean; pedido?: string; fecha?: string; prendas_pendientes?: string[] };
 type FilaTienda = { quien: string; estudiante_id: string; fiado: number; pagado: number; saldo: number };
 
 export function Saldos() {
@@ -218,7 +218,7 @@ function SaldosConcepto({ concepto, filtro, buscar }: { concepto: string; filtro
                   <td>{f.estudiante_id ? <button className="enlace" onClick={() => ir('ficha', { estudiante_id: f.estudiante_id })}>{f.quien}</button> : f.quien}
                     {esUniforme && <><br /><small className="suave">{f.pedido} · {fechaCorta(f.fecha || '')}</small></>}
                     {f.sin_cargo && <><br /><small className="suave">Pagó pero no tiene cargo</small></>}</td>
-                  {!esUniforme && <td className="num" data-label="Montajes">{f.cantidad || '—'}</td>}
+                  {!esUniforme && <td className="num" data-label="Montajes">{f.cantidad || '—'}{f.montajes && <><br /><small className="suave">{f.montajes}</small></>}</td>}
                   <td className="num" data-label="Valor">{pesos(f.valor)}</td>
                   <td className="num" data-label="Pagado">{pesos(f.pagado)}</td>
                   <td data-label="Estado"><Estado saldo={f.saldo} /></td>
@@ -254,8 +254,16 @@ function EditarCargo({ fila, base, concepto, onCerrar, onListo }: { fila: FilaSa
   return (
     <Modal titulo={`Cargo de ${fila.quien}`} onCerrar={onCerrar}>
       <div className="rejilla">
-        <Campo label="Montajes" ayuda={base ? `Valor: ${pesos(cantidad * base - (tocoDesc ? desc.descuento : 0))}${!tocoDesc && fila.valor !== (fila.cantidad || 1) * base ? ' (conserva su descuento actual)' : ''}` : undefined}><input type="number" min={1} value={cantidad} onChange={e => setCantidad(Number(e.target.value))} /></Campo>
-        {base > 0 && <SelectorDescuento concepto={concepto} base={cantidad * base} valor={desc} onChange={d => { setDesc(d); setTocoDesc(true); }} />}
+        {fila.montajes ? (
+          <div className="campo" style={{ gridColumn: '1 / -1' }}>
+            <label>Montajes</label>
+            <div className="elegido">{fila.montajes}</div>
+            <span className="ayuda">Se cambian en <b>Montajes de la clausura</b>: al agregarlo o quitarlo de un grupo, el cargo se ajusta solo.</span>
+          </div>
+        ) : (
+          <Campo label="Montajes" ayuda={base ? `Valor: ${pesos(cantidad * base - (tocoDesc ? desc.descuento : 0))}${!tocoDesc && fila.valor !== (fila.cantidad || 1) * base ? ' (conserva su descuento actual)' : ''}` : undefined}><input type="number" min={1} value={cantidad} onChange={e => setCantidad(Number(e.target.value))} /></Campo>
+        )}
+        {base > 0 && <SelectorDescuento concepto={concepto} base={fila.montajes ? fila.valor : cantidad * base} valor={desc} onChange={d => { setDesc(d); setTocoDesc(true); }} />}
         <Campo label="Nota (opcional)" ancho><input value={nota} onChange={e => setNota(e.target.value)} placeholder="Ej: se unió a contempo" /></Campo>
       </div>
       <p className="suave" style={{ fontSize: 13 }}>El cambio queda en la bitácora con el valor anterior.</p>
