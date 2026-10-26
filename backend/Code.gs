@@ -16,7 +16,7 @@
 // Hoja de cálculo que sirve de base de datos (Registros Vox Corpus Danza, cuenta voxcorpusdanza@gmail.com).
 const HOJA_ID = '1XWxLoazHg4dCTqvaM0E2ZQYFzcL0XjNFcp_xQ4B51p0';
 const TZ = 'America/Bogota';
-const VERSION = '1.8.0';
+const VERSION = '1.9.0';
 const SESION_SEG = 6 * 60 * 60;          // máximo que permite CacheService
 const INTENTOS_MAX = 5;                  // claves erradas antes de bloquear
 const BLOQUEO_SEG = 15 * 60;
@@ -27,7 +27,7 @@ const H = {
   ESTUDIANTES: 'Estudiantes', PRODUCTOS: 'Productos', CAT_PRENDAS: 'Prendas uniforme', CONCEPTOS: 'Conceptos',
   PROFES: 'Profes', CUENTAS: 'Cuentas', LISTAS: 'Listas', USUARIOS: 'Usuarios', BITACORA: 'Bitácora',
   INVENTARIO: 'Inventario', PLANES: 'Planes', DESCUENTOS: 'Descuentos', CIERRES: 'Cierres caja',
-  MONTAJES: 'Montajes', INTEGRANTES: 'Integrantes montaje',
+  MONTAJES: 'Montajes', INTEGRANTES: 'Integrantes montaje', COSTOS: 'Costos montaje',
 };
 const SALDO_FAVOR = 'Saldo a favor';
 const CAMBIO_NO_DEVUELTO = 'Cambio no devuelto';
@@ -41,6 +41,8 @@ const HOJAS_NUEVAS = {
   'Montajes': ['id', 'nombre', 'profe', 'valor_vestuario', 'activo', 'nota', 'registrado_por', 'registrado_en', 'actualizado_por', 'actualizado_en'],
   'Integrantes montaje': ['id', 'montaje_id', 'montaje', 'estudiante_id', 'estudiante', 'registrado_por', 'registrado_en', 'estado',
     'motivo_anulacion', 'anulado_por', 'anulado_en'],
+  'Costos montaje': ['id', 'montaje_id', 'montaje', 'proveedor', 'descripcion', 'valor', 'nota', 'registrado_por', 'registrado_en',
+    'actualizado_por', 'actualizado_en', 'estado', 'motivo_anulacion', 'anulado_por', 'anulado_en'],
   'Cierres caja': ['id', 'fecha', 'base_inicial', 'entradas', 'salidas', 'esperado', 'contado', 'diferencia', 'entregado',
     'entregado_a', 'cuenta_destino', 'base_siguiente', 'nota', 'registrado_por', 'registrado_en', 'estado', 'motivo_anulacion',
     'anulado_por', 'anulado_en'],
@@ -55,6 +57,7 @@ const TIPOS_INVENTARIO = ['Entrada', 'Conteo', 'Salida'];
 const ANULABLES = {
   'Pagos': null, 'Cargos': null, 'Ventas tienda': 'venta', 'Pedidos uniforme': null,
   'Pago profes': 'pago', 'Gastos': null, 'Traslados': null, 'Inventario': null, 'Cierres caja': null,
+  'Costos montaje': null,
 };
 
 // Columnas que configurar() agrega si la hoja no las tiene.
@@ -64,7 +67,7 @@ const COLUMNAS_EXTRA = {
   'Ventas tienda': ['recibido_en', 'anulado_por', 'anulado_en'],
   'Pedidos uniforme': ['anulado_por', 'anulado_en', 'valor_lista', 'descuento', 'motivo_descuento'],
   'Pago profes': ['anulado_por', 'anulado_en'],
-  'Gastos': ['anulado_por', 'anulado_en'],
+  'Gastos': ['anulado_por', 'anulado_en', 'montaje_id', 'costo_id'],
   'Traslados': ['anulado_por', 'anulado_en'],
   'Usuarios': ['clave_nueva', 'sesion_v'],
   'Estudiantes': ['actualizado_por', 'actualizado_en', 'supabase_id', 'estado_admin', 'valor_mensual', 'sincronizado_en'],
@@ -110,6 +113,8 @@ const ACCIONES = {
   quitarIntegrante:    [quitarIntegrante_, true],
   confirmarMontajes:   [confirmarMontajes_, true],
   noParticipa:         [noParticipa_, true],
+  guardarCostoMontaje: [guardarCostoMontaje_, true],
+  abonarCostoMontaje:  [abonarCostoMontaje_, true],
   cerrarCaja:          [cerrarCaja_, true],
   resumenDia:          [resumenDia_, false],
   reporteTienda:       [reporteTienda_, false],
@@ -557,6 +562,12 @@ function anular_(d, ses) {
     const cs = cierresValidos_();
     if (!cs.length || cs[cs.length - 1].id !== d.id) throw err_('Solo se puede anular el último cierre de caja. Anula primero los más recientes.');
   }
+  if (hoja === H.COSTOS) {
+    soloDirector_(ses);
+    const abonos = abonosDeCosto_(d.id);
+    if (abonos.length) throw err_('Este costo tiene ' + abonos.length + ' abono(s) al proveedor (' + abonos.map(g => g.id).join(', ') + '). Anula primero los abonos.');
+  }
+  if (hoja === H.GASTOS && filas.some(f => f.costo_id)) soloDirector_(ses);
   if (hoja === H.PAGOS && filas.some(f => f.tipo === 'Saldo usado' && f.relacionado))
     throw err_('Este movimiento es parte de un pago con saldo a favor (' + filas[0].relacionado + '). Anula ese pago y se devuelve todo.');
   const ahora = new Date();
@@ -2291,8 +2302,10 @@ function listarMontajes_(d, ses) {
       montajes_cargo: num_(c.montajes_previos) || num_(c.cantidad), montajes_asignados: asignados[c.estudiante_id] || 0, valor: num_(c.valor_total) }))
     .sort((a, b) => String(a.estudiante).localeCompare(String(b.estudiante), 'es'));
   const rep = repartoMontajes_();
+  const director = norm_(ses.rol) === 'director';
+  const costos = director ? costosPorMontaje_() : {};
   return {
-    es_director: norm_(ses.rol) === 'director',
+    es_director: director,
     valor_base: concepto_(CONCEPTO_VESTUARIO).valor_base,
     pagado_de_mas: rep.pagado_de_mas, pagos_sin_montaje: rep.sin_montaje,
     montajes: montajes.map(m => {
@@ -2300,7 +2313,8 @@ function listarMontajes_(d, ses) {
       const xs = (porMontaje[m.id] || []).map(i => Object.assign(i, rm.integrantes[i.estudiante_id] || { esperado: 0, pagado: 0, saldo: 0 }))
         .sort((a, b) => String(a.estudiante).localeCompare(String(b.estudiante), 'es'));
       return { id: m.id, nombre: m.nombre, profe: m.profe || '', valor_vestuario: num_(m.valor_vestuario), activo: norm_(m.activo) !== 'no',
-        nota: m.nota || '', integrantes: xs, cantidad: xs.length, esperado: rm.esperado, recogido: rm.recogido, por_cobrar: rm.por_cobrar };
+        nota: m.nota || '', integrantes: xs, cantidad: xs.length, esperado: rm.esperado, recogido: rm.recogido, por_cobrar: rm.por_cobrar,
+        costos: director ? (costos[m.id] || []) : undefined };
     }).sort((a, b) => (Number(b.activo) - Number(a.activo)) || String(a.nombre).localeCompare(String(b.nombre), 'es')),
     por_revisar: porRevisar,
   };
@@ -2342,7 +2356,10 @@ function guardarMontaje_(d, ses) {
   cambios.actualizado_por = ses.nombre;
   cambios.actualizado_en = new Date();
   actualizar_(t, m, cambios);
-  if (cambios.nombre) renombrar_(H.INTEGRANTES, m.id, cambios.nombre, 'montaje_id', 'montaje');
+  if (cambios.nombre) {
+    renombrar_(H.INTEGRANTES, m.id, cambios.nombre, 'montaje_id', 'montaje');
+    if (hojaExiste_(H.COSTOS)) renombrar_(H.COSTOS, m.id, cambios.nombre, 'montaje_id', 'montaje');
+  }
   let recalculados = 0;
   if (cambios.nombre || cambios.valor_vestuario !== undefined) miembros.forEach(i => { const a = ajustarCargoVestuario_(i.estudiante_id, ses); recalculados++; if (a) avisos.push(a); });
   bitacora_(ses, 'editarMontaje', H.MONTAJES, m.id, { antes: antes, despues: cambios, cargos_recalculados: recalculados });
@@ -2374,6 +2391,88 @@ function quitarIntegrante_(d, ses) {
   return { id: i.id, estudiante: i.estudiante, montaje: i.montaje, aviso: aviso };
 }
 
+// ---------- costos del vestuario (solo directores)
+/*
+ * Cada montaje puede tener uno o varios costos (p. ej. confección con un proveedor, accesorios con otro).
+ * Un costo es lo que se le debe al proveedor; cada abono es un gasto normal (sale de una cuenta y cuenta en
+ * la caja y en los saldos de las cuentas) ligado al costo con costo_id. Pagar completo = un solo abono por el total.
+ */
+const CATEGORIA_VESTUARIO = 'Vestuario';
+
+function costosValidos_() {
+  if (!hojaExiste_(H.COSTOS)) return [];
+  return tabla_(H.COSTOS).filas.filter(f => f.id && esValido_(f));
+}
+
+function abonosDeCosto_(costoId) {
+  return tabla_(H.GASTOS).filas.filter(g => esValido_(g) && g.costo_id && g.costo_id === costoId);
+}
+
+function costosPorMontaje_() {
+  const abonos = {};
+  tabla_(H.GASTOS).filas.filter(g => esValido_(g) && g.costo_id).forEach(g => (abonos[g.costo_id] = abonos[g.costo_id] || []).push(g));
+  const o = {};
+  costosValidos_().forEach(c => {
+    const xs = (abonos[c.id] || []).slice().sort((a, b) => (ymd_(a.fecha) < ymd_(b.fecha) ? -1 : ymd_(a.fecha) > ymd_(b.fecha) ? 1 : tiempo_(a.registrado_en) - tiempo_(b.registrado_en)));
+    const pagado = sum_(xs, 'valor');
+    (o[c.montaje_id] = o[c.montaje_id] || []).push({ id: c.id, proveedor: String(c.proveedor || ''), descripcion: String(c.descripcion || ''),
+      valor: num_(c.valor), nota: String(c.nota || ''), pagado: pagado, pendiente: Math.max(0, num_(c.valor) - pagado),
+      abonos: xs.map(g => ({ id: g.id, fecha: ymd_(g.fecha), valor: num_(g.valor), pagado_desde: g.pagado_desde, nota: String(g.nota || '') })) });
+  });
+  return o;
+}
+
+function guardarCostoMontaje_(d, ses) {
+  soloDirector_(ses);
+  if (!hojaExiste_(H.COSTOS)) throw err_('Falta la pestaña de costos: ejecuta "configurar" en Apps Script.');
+  const t = tabla_(H.COSTOS);
+  if (!d.id) {
+    const m = tabla_(H.MONTAJES).filas.find(f => f.id && f.id === d.montaje_id);
+    if (!m) throw err_('Escoge el montaje.');
+    const c = auditar_({ id: siguienteId_(H.COSTOS, 'id', 'CM', 3), montaje_id: m.id, montaje: m.nombre, proveedor: requerido_(d.proveedor, 'proveedor'),
+      descripcion: texto_(d.descripcion), valor: monto_(d.valor), nota: texto_(d.nota) }, ses);
+    insertar_(H.COSTOS, [c]);
+    bitacora_(ses, 'crearCostoMontaje', H.COSTOS, c.id, c);
+    return { id: c.id };
+  }
+  const c = t.filas.find(f => f.id === d.id && esValido_(f));
+  if (!c) throw err_('No encontré ese costo.');
+  const cambios = {};
+  if (d.proveedor !== undefined && requerido_(d.proveedor, 'proveedor') !== String(c.proveedor || '')) cambios.proveedor = texto_(d.proveedor);
+  if (d.descripcion !== undefined && texto_(d.descripcion) !== String(c.descripcion || '')) cambios.descripcion = texto_(d.descripcion);
+  if (d.nota !== undefined && texto_(d.nota) !== String(c.nota || '')) cambios.nota = texto_(d.nota);
+  if (d.valor !== undefined && monto_(d.valor) !== num_(c.valor)) {
+    const pagado = sum_(abonosDeCosto_(c.id), 'valor');
+    if (monto_(d.valor) < pagado) throw err_('Ya se le han abonado ' + pesos_(pagado) + ' a este proveedor: el costo no puede quedar por debajo de eso.');
+    cambios.valor = monto_(d.valor);
+  }
+  if (!Object.keys(cambios).length) throw err_('No hay cambios para guardar.');
+  const antes = {}; Object.keys(cambios).forEach(k => antes[k] = c[k]);
+  cambios.actualizado_por = ses.nombre;
+  cambios.actualizado_en = new Date();
+  actualizar_(t, c, cambios);
+  bitacora_(ses, 'editarCostoMontaje', H.COSTOS, c.id, { antes: antes, despues: cambios });
+  return { id: c.id };
+}
+
+function abonarCostoMontaje_(d, ses) {
+  soloDirector_(ses);
+  const c = costosValidos_().find(f => f.id === d.costo_id);
+  if (!c) throw err_('No encontré ese costo.');
+  const valor = monto_(d.valor);
+  const pagado = sum_(abonosDeCosto_(c.id), 'valor');
+  const pendiente = num_(c.valor) - pagado;
+  if (pendiente <= 0) throw err_('A este proveedor ya se le pagó todo.');
+  if (valor > pendiente) throw err_('Eso es más de lo que falta pagarle (' + pesos_(pendiente) + '). Si el costo subió, edítalo primero.');
+  const categorias = listas_()['categoria_gasto'] || [];
+  const categoria = categorias.find(o => norm_(o) === norm_(CATEGORIA_VESTUARIO)) || categorias.find(o => norm_(o) === 'otro') || CATEGORIA_VESTUARIO;
+  const g = { id: siguienteId_(H.GASTOS, 'id', 'G', 4), fecha: fecha_(d.fecha), categoria: categoria,
+    descripcion: 'Vestuario ' + c.montaje + ' · ' + c.proveedor + (valor === pendiente ? (pagado ? ' (último abono)' : ' (pago completo)') : ' (abono)'),
+    valor: valor, pagado_desde: cuentaActiva_(d.pagado_desde, 'pagado desde'), nota: texto_(d.nota), montaje_id: c.montaje_id, costo_id: c.id };
+  insertar_(H.GASTOS, [auditar_(g, ses)]);
+  bitacora_(ses, 'abonarCostoMontaje', H.GASTOS, g.id, g);
+  return { id: g.id, pendiente: pendiente - valor };
+}
 
 // ===================================================================== carga inicial de montajes (26/10)
 /*

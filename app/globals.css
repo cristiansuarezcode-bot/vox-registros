@@ -301,3 +301,22 @@ table.tabla { width: 100%; border-collapse: collapse; font-size: 14px; }
   .tabla.tarjetas td.acciones-fila .btn { flex: 1; }
 }
 @media (max-width: 640px) { .tabla.tarjetas td.solo-escritorio { display: none; } }
+
+/* costos del vestuario de cada montaje (solo directores) */
+.costos-montaje { border: 1px solid var(--linea); border-radius: var(--radio); margin-bottom: 10px; }
+.costos-resumen { width: 100%; display: flex; align-items: center; gap: 10px; padding: 10px 12px; background: none; border: 0; cursor: pointer; text-align: left; font: inherit; color: inherit; }
+.costos-resumen > span:first-child { display: flex; flex-direction: column; gap: 2px; flex: 1; }
+.costos-resumen small { font-size: 11px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: var(--suave); }
+.costos-resumen b { font-size: 17px; font-variant-numeric: tabular-nums; }
+.costos-resumen .flecha { color: var(--suave); font-size: 11px; }
+.costos-detalle { padding: 0 12px 12px; border-top: 1px solid var(--linea); padding-top: 10px; }
+.costo { padding: 10px 0; border-bottom: 1px dashed var(--linea); }
+.costo:first-child { padding-top: 0; }
+.costo-cabeza, .costo-estado { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.costo-cabeza b:last-child { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.costo-estado { margin-top: 4px; font-size: 14px; }
+.abonos { list-style: none; padding: 0; margin: 8px 0 0; font-size: 13px; }
+.abonos li { display: flex; justify-content: space-between; gap: 8px; padding: 3px 0; color: var(--suave); }
+.abonos li span:last-child { font-variant-numeric: tabular-nums; color: var(--texto, inherit); }
+.costo-acciones { display: flex; gap: 8px; margin-top: 8px; }
+.costos-detalle > .btn { margin-top: 10px; }

@@ -1,11 +1,13 @@
 'use client';
 import { useState } from 'react';
 import type { Quien } from '@/lib/tipos';
-import { pesos } from '@/lib/util';
-import { BuscarQuien, Campo, Cargando, ErrorCaja, Modal, Monto, Pantalla, Selector, useAccion, useApp, useDatos, usePorPartes } from './ui';
+import { fechaCorta, hoy, pesos } from '@/lib/util';
+import { BuscarQuien, Campo, Cargando, ErrorCaja, Modal, Monto, Pantalla, Segmentado, Selector, cuentasTodas, useAccion, useApp, useDatos, usePorPartes } from './ui';
 
 type Integrante = { id: string; estudiante_id: string; estudiante: string; esperado: number; pagado: number; saldo: number };
-type Montaje = { id: string; nombre: string; profe: string; valor_vestuario: number; activo: boolean; nota: string; integrantes: Integrante[]; cantidad: number; esperado: number; recogido: number; por_cobrar: number };
+type Abono = { id: string; fecha: string; valor: number; pagado_desde: string; nota: string };
+type Costo = { id: string; proveedor: string; descripcion: string; valor: number; nota: string; pagado: number; pendiente: number; abonos: Abono[] };
+type Montaje = { id: string; nombre: string; profe: string; valor_vestuario: number; activo: boolean; nota: string; integrantes: Integrante[]; cantidad: number; esperado: number; recogido: number; por_cobrar: number; costos?: Costo[] };
 type PorRevisar = { estudiante_id: string; estudiante: string; cargo: string; montajes_cargo: number; montajes_asignados: number; valor: number };
 type Lista = { es_director: boolean; valor_base: number; montajes: Montaje[]; por_revisar: PorRevisar[]; pagado_de_mas: number; pagos_sin_montaje: number };
 
@@ -26,6 +28,10 @@ export function Montajes() {
           <div className="cifra"><span>Debería recoger</span><b>{pesos(activos.reduce((s, m) => s + m.esperado, 0))}</b></div>
           <div className="cifra"><span>Recogido</span><b>{pesos(activos.reduce((s, m) => s + m.recogido, 0))}</b></div>
           <div className="cifra"><span>Falta por cobrar</span><b>{pesos(activos.reduce((s, m) => s + m.por_cobrar, 0))}</b></div>
+          {d.es_director && <>
+            <div className="cifra"><span>Costo vestuarios</span><b>{pesos(sumaCostos(activos, 'valor'))}</b></div>
+            <div className="cifra"><span>Debemos a proveedores</span><b>{pesos(sumaCostos(activos, 'pendiente'))}</b></div>
+          </>}
         </div>
         {(d.pagado_de_mas > 0 || d.pagos_sin_montaje > 0) && <p className="suave" style={{ fontSize: 13, marginTop: -4 }}>
           {d.pagado_de_mas > 0 && <>Pagado de más (queda a favor de los estudiantes): {pesos(d.pagado_de_mas)}. </>}
@@ -51,6 +57,8 @@ export function Montajes() {
     </Pantalla>
   );
 }
+
+const sumaCostos = (ms: Montaje[], campo: 'valor' | 'pagado' | 'pendiente') => ms.reduce((s, m) => s + (m.costos || []).reduce((t, c) => t + c[campo], 0), 0);
 
 function TarjetaMontaje({ m, director, onEditar, onListo }: { m: Montaje; director: boolean; onEditar: () => void; onListo: () => void }) {
   const { aviso } = useApp();
@@ -82,6 +90,7 @@ function TarjetaMontaje({ m, director, onEditar, onListo }: { m: Montaje; direct
       </div>
       {m.esperado > 0 && <div className="avance" title={`${Math.round(m.recogido * 100 / m.esperado)}% recogido`}><span style={{ width: `${Math.min(100, m.recogido * 100 / m.esperado)}%` }} /></div>}
       {m.nota && <p className="suave" style={{ fontSize: 13, margin: '0 0 8px' }}>{m.nota}</p>}
+      {director && m.costos && <CostosMontaje m={m} onListo={onListo} />}
       <button className="btn secundario" style={{ width: '100%' }} onClick={() => setAbierto(a => !a)}>{abierto ? 'Ocultar integrantes' : `Ver y agregar integrantes`}</button>
       {abierto && <div style={{ marginTop: 12 }}>
         <div key={clave}><BuscarQuien valor={null} onChange={agregar} permitirPersona={false} etiqueta="Agregar integrante" /></div>
@@ -218,6 +227,128 @@ function EditarMontaje({ m, valorBase, onCerrar, onListo }: { m: Montaje | null;
           : <button className="btn secundario" style={{ marginLeft: 'auto' }} disabled={ocupado} onClick={() => guardar({ activo: true })}>Activar</button>)}
       </div>
       {m && m.activo && m.cantidad > 0 && <p className="ayuda" style={{ marginTop: 8 }}>Para archivarlo primero hay que quitar sus integrantes.</p>}
+    </Modal>
+  );
+}
+
+// ------------------------------------------------------------------ costos del vestuario (solo directores)
+function CostosMontaje({ m, onListo }: { m: Montaje; onListo: () => void }) {
+  const costos = m.costos || [];
+  const [abierto, setAbierto] = useState(false);
+  const [editar, setEditar] = useState<Costo | 'nuevo' | null>(null);
+  const [abonar, setAbonar] = useState<Costo | null>(null);
+  const total = costos.reduce((s, c) => s + c.valor, 0);
+  const pendiente = costos.reduce((s, c) => s + c.pendiente, 0);
+  return (
+    <div className="costos-montaje">
+      <button className="costos-resumen" onClick={() => setAbierto(a => !a)} aria-expanded={abierto}>
+        <span><small>Costo del vestuario</small><b>{costos.length ? pesos(total) : 'Sin registrar'}</b></span>
+        {costos.length > 0 && (pendiente > 0 ? <span className="chip debe">Debemos {pesos(pendiente)}</span> : <span className="chip ok">Pagado</span>)}
+        <span className="flecha">{abierto ? '▲' : '▼'}</span>
+      </button>
+      {abierto && <div className="costos-detalle">
+        {!costos.length && <p className="suave" style={{ fontSize: 14, margin: '0 0 10px' }}>Agrega lo que cuesta el vestuario: uno por proveedor (confección, accesorios, zapatos…).</p>}
+        {costos.map(c => (
+          <div key={c.id} className="costo">
+            <div className="costo-cabeza">
+              <span><b>{c.proveedor}</b>{c.descripcion && <small className="suave"> · {c.descripcion}</small>}</span>
+              <b>{pesos(c.valor)}</b>
+            </div>
+            <div className="costo-estado">
+              <span className="suave">Pagado {pesos(c.pagado)}</span>
+              {c.pendiente > 0 ? <span className="chip debe">Falta {pesos(c.pendiente)}</span> : <span className="chip ok">Paz y salvo</span>}
+            </div>
+            {c.abonos.length > 0 && <ul className="abonos">{c.abonos.map(a => (
+              <li key={a.id}><span>{fechaCorta(a.fecha)} · {a.pagado_desde}{a.nota && <small className="suave"> · {a.nota}</small>}</span><span>{pesos(a.valor)}</span></li>))}
+            </ul>}
+            {c.nota && <p className="suave" style={{ fontSize: 13, margin: '4px 0 0' }}>{c.nota}</p>}
+            <div className="costo-acciones">
+              {c.pendiente > 0 && <button className="btn chico" onClick={() => setAbonar(c)}>Registrar pago</button>}
+              <button className="btn secundario chico" onClick={() => setEditar(c)}>Editar</button>
+            </div>
+          </div>
+        ))}
+        <button className="btn secundario chico" onClick={() => setEditar('nuevo')}>+ Agregar costo</button>
+      </div>}
+      {editar && <EditarCosto m={m} c={editar === 'nuevo' ? null : editar} onCerrar={() => setEditar(null)} onListo={() => { setEditar(null); setAbierto(true); onListo(); }} />}
+      {abonar && <AbonarCosto m={m} c={abonar} onCerrar={() => setAbonar(null)} onListo={() => { setAbonar(null); onListo(); }} />}
+    </div>
+  );
+}
+
+function EditarCosto({ m, c, onCerrar, onListo }: { m: Montaje; c: Costo | null; onCerrar: () => void; onListo: () => void }) {
+  const { aviso } = useApp();
+  const { ocupado, correr } = useAccion();
+  const [proveedor, setProveedor] = useState(c?.proveedor || '');
+  const [descripcion, setDescripcion] = useState(c?.descripcion || '');
+  const [valor, setValor] = useState(c?.valor || 0);
+  const [nota, setNota] = useState(c?.nota || '');
+  const [anular, setAnular] = useState(false);
+  const [motivo, setMotivo] = useState('');
+  const guardar = async () => {
+    const datos: Record<string, unknown> = c ? { id: c.id } : { montaje_id: m.id };
+    if (!c || proveedor.trim() !== c.proveedor) datos.proveedor = proveedor;
+    if (!c || descripcion.trim() !== c.descripcion) datos.descripcion = descripcion;
+    if (!c || valor !== c.valor) datos.valor = valor;
+    if (!c || nota.trim() !== c.nota) datos.nota = nota;
+    if (await correr('guardarCostoMontaje', datos)) { aviso(c ? 'Costo actualizado' : `Costo de ${proveedor.trim()} agregado a ${m.nombre}`); onListo(); }
+  };
+  const quitar = async () => {
+    if (await correr('anular', { hoja: 'Costos montaje', id: c!.id, motivo }, 'Costo anulado')) onListo();
+  };
+  const bajo = c && valor > 0 && valor < c.pagado;
+  return (
+    <Modal titulo={c ? `Costo de ${c.proveedor}` : `Nuevo costo · ${m.nombre}`} onCerrar={onCerrar}>
+      <div className="rejilla">
+        <Campo label="Proveedor"><input autoFocus value={proveedor} onChange={e => setProveedor(e.target.value)} placeholder="Ej: Confecciones Luz" /></Campo>
+        <Campo label="¿Qué incluye? (opcional)"><input value={descripcion} onChange={e => setDescripcion(e.target.value)} placeholder="Ej: 12 vestidos con falda" /></Campo>
+        <Campo label="Valor total" ayuda={bajo ? `Ya se le pagaron ${pesos(c!.pagado)}: no puede quedar por debajo.` : 'Lo que cobra el proveedor por todo'}><Monto valor={valor} onChange={setValor} /></Campo>
+        <Campo label="Nota (opcional)"><input value={nota} onChange={e => setNota(e.target.value)} placeholder="Ej: entrega el 20 de noviembre" /></Campo>
+      </div>
+      <div className="acciones">
+        <button className="btn" disabled={ocupado || !proveedor.trim() || valor <= 0 || !!bajo} onClick={guardar}>{ocupado ? 'Guardando…' : 'Guardar'}</button>
+        <button className="btn secundario" onClick={onCerrar}>Cancelar</button>
+        {c && !anular && <button className="btn secundario" style={{ marginLeft: 'auto' }} disabled={c.abonos.length > 0} title={c.abonos.length ? 'Tiene pagos: anúlalos primero en Consultas → Gastos' : ''} onClick={() => setAnular(true)}>Anular</button>}
+      </div>
+      {c && c.abonos.length > 0 && <p className="ayuda" style={{ marginTop: 8 }}>Para anular este costo primero hay que anular sus pagos (en Consultas → Gastos).</p>}
+      {anular && <div className="rejilla" style={{ marginTop: 12 }}>
+        <Campo label="¿Por qué se anula?" ancho><input autoFocus value={motivo} onChange={e => setMotivo(e.target.value)} placeholder="Ej: se registró en el montaje equivocado" /></Campo>
+        <div className="acciones" style={{ gridColumn: '1 / -1', marginTop: 0 }}><button className="btn peligro" disabled={ocupado || motivo.trim().length < 5} onClick={quitar}>Anular costo</button></div>
+      </div>}
+    </Modal>
+  );
+}
+
+function AbonarCosto({ m, c, onCerrar, onListo }: { m: Montaje; c: Costo; onCerrar: () => void; onListo: () => void }) {
+  const { cat, aviso } = useApp();
+  const { ocupado, correr } = useAccion();
+  const [valor, setValor] = useState(0);
+  const [fecha, setFecha] = useState(hoy());
+  const [desde, setDesde] = useState('');
+  const [nota, setNota] = useState('');
+  const guardar = async () => {
+    const r = await correr<{ pendiente: number }>('abonarCostoMontaje', { costo_id: c.id, valor, fecha, pagado_desde: desde, nota });
+    if (r) { aviso(r.pendiente > 0 ? `Pago a ${c.proveedor} guardado. Falta ${pesos(r.pendiente)}` : `${c.proveedor} quedó a paz y salvo`); onListo(); }
+  };
+  return (
+    <Modal titulo={`Pagar a ${c.proveedor}`} onCerrar={onCerrar}>
+      <p style={{ fontSize: 15, marginTop: 0 }}>Vestuario de <b>{m.nombre}</b>: {pesos(c.valor)} en total, pagado {pesos(c.pagado)}, falta <b>{pesos(c.pendiente)}</b>.</p>
+      <div className="rejilla">
+        <Campo label="¿Cuánto se le paga?" ayuda={valor > c.pendiente ? `Es más de lo que falta (${pesos(c.pendiente)}).` : valor === c.pendiente ? 'Queda a paz y salvo' : valor ? `Quedaría faltando ${pesos(c.pendiente - valor)}` : ''}>
+          <Monto autoFocus valor={valor} onChange={setValor} />
+        </Campo>
+        <Campo label="Fecha"><input type="date" value={fecha} max={hoy()} onChange={e => setFecha(e.target.value)} /></Campo>
+        <div className="acciones" style={{ gridColumn: '1 / -1', marginTop: -4 }}>
+          <button className="btn secundario chico" onClick={() => setValor(c.pendiente)}>Pagar todo lo que falta</button>
+        </div>
+        <Campo label="¿De dónde salió la plata?" ancho><Segmentado opciones={cuentasTodas(cat)} valor={desde} onChange={setDesde} /></Campo>
+        <Campo label="Nota (opcional)" ancho><input value={nota} onChange={e => setNota(e.target.value)} placeholder="Ej: le transfirió Liz" /></Campo>
+      </div>
+      <div className="acciones">
+        <button className="btn" disabled={ocupado || !valor || valor > c.pendiente || !desde} onClick={guardar}>{ocupado ? 'Guardando…' : 'Guardar pago'}</button>
+        <button className="btn secundario" onClick={onCerrar}>Cancelar</button>
+      </div>
+      {desde === 'Caja' && <p className="ayuda" style={{ marginTop: 8 }}>Sale de la caja: va a aparecer en el cierre del día como un gasto.</p>}
     </Modal>
   );
 }
