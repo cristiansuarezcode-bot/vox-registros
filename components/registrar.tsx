@@ -54,6 +54,7 @@ export function RegistrarPago() {
   const [metodo, setMetodo] = useState(params.metodo === 'saldo' ? SALDO : metodosBase[0] || 'Efectivo');
   const [recibido, setRecibido] = useState('Caja');
   const [pedido, setPedido] = useState('');
+  const [montaje, setMontaje] = useState(''); // vestuario: a qué montaje va ('' = repartir)
   const [nota, setNota] = useState('');
   const [desc, setDesc] = useState<ValorDescuento>(SIN_DESCUENTO);
   const [pedidos, setPedidos] = useState<{ pedido: string; saldo: number; estudiante_id: string; quien: string; prendas_pendientes: string[] }[]>([]);
@@ -63,6 +64,8 @@ export function RegistrarPago() {
   const metodos = favor.a_favor > 0 || conSaldo ? [...metodosBase, SALDO] : metodosBase;
 
   const esUniforme = norm(concepto) === 'uniforme';
+  const esVestuario = norm(concepto) === 'vestuario clausura';
+  const montajesQuien = (quien?.estudiante_id && cat.estudiantes.find(e => e.id === quien.estudiante_id)?.montajes) || [];
   useEffect(() => {
     if (!esUniforme) return;
     api<{ filas: typeof pedidos }>('reporteSaldos', { concepto: 'Uniforme' }).then(r => setPedidos(r.filas)).catch(() => setPedidos([]));
@@ -93,6 +96,7 @@ export function RegistrarPago() {
   };
   const elegirQuien = (q: Quien) => {
     setQuien(q);
+    setMontaje('');
     setDesc(SIN_DESCUENTO);
     if (concepto) { const v = valorSugerido(concepto, q); if (v) setValor(v); }
   };
@@ -107,10 +111,11 @@ export function RegistrarPago() {
 
   const listo = quien && concepto && valor > 0 && metodo && (conSaldo ? valor <= disponible : recibido) && (!esUniforme || pedido) && (!desc.descuento || desc.motivo.trim());
   const guardar = async () => {
-    const r = await correr<{ id: string }>('registrarPago', { fecha, ...datosQuien(quien), concepto, valor, metodo, recibido_en: conSaldo ? '' : recibido, pedido_uniforme: pedido, nota, ...datosDescuento(desc) });
+    const r = await correr<{ id: string }>('registrarPago', { fecha, ...datosQuien(quien), concepto, valor, metodo, recibido_en: conSaldo ? '' : recibido, pedido_uniforme: pedido, nota, ...datosDescuento(desc),
+      ...(esVestuario && montaje && montajesQuien.length > 1 ? { montaje_id: montaje } : {}) });
     if (r) {
       aviso(`Pago guardado (${r.id}): ${quien?.nombre} · ${concepto} · ${pesos(valor)}${conSaldo ? ' con saldo a favor' : ''}`);
-      setQuien(null); setValor(0); setNota(''); setPedido(''); setDesc(SIN_DESCUENTO); setClave(k => k + 1);
+      setQuien(null); setValor(0); setNota(''); setPedido(''); setMontaje(''); setDesc(SIN_DESCUENTO); setClave(k => k + 1);
       if (conSaldo) setMetodo(metodosBase[0] || 'Efectivo');
       const k = cat.conceptos.find(x => x.nombre === concepto);
       if (k?.valor_base && norm(concepto) !== 'mensualidad') setValor(k.valor_base);
@@ -129,6 +134,13 @@ export function RegistrarPago() {
           <Campo label="Concepto">
             <Selector valor={concepto} onChange={elegirConcepto} vacio="Escoge…" opciones={cat.conceptos.map(c => c.nombre)} />
           </Campo>
+          {esVestuario && montajesQuien.length > 1 && (
+            <Campo label="¿Para qué montaje?" ancho ayuda={montaje ? 'Todo el pago va a ese montaje.' : `Se reparte entre sus ${montajesQuien.length} montajes según el precio de cada uno.`}>
+              <Segmentado opciones={['Repartir', ...montajesQuien.map(m => m.nombre)]} valor={montaje ? (montajesQuien.find(m => m.id === montaje)?.nombre || 'Repartir') : 'Repartir'}
+                onChange={v => setMontaje(v === 'Repartir' ? '' : montajesQuien.find(m => m.nombre === v)?.id || '')} />
+            </Campo>
+          )}
+          {esVestuario && montajesQuien.length === 1 && <div className="campo" style={{ gridColumn: '1 / -1' }}><span className="ayuda" style={{ marginTop: 0 }}>Va al montaje <b>{montajesQuien[0].nombre}</b>.</span></div>}
           {esUniforme && (
             <Campo label="Pedido de uniforme" ayuda={quien && !pedidosDeQuien.length ? 'No tiene pedidos con saldo. Créalo en Uniformes.' : undefined}>
               <Selector valor={pedido} onChange={setPedido} vacio="Escoge el pedido…"

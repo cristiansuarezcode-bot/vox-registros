@@ -4,10 +4,10 @@ import type { Quien } from '@/lib/tipos';
 import { pesos } from '@/lib/util';
 import { BuscarQuien, Campo, Cargando, ErrorCaja, Modal, Monto, Pantalla, Selector, useAccion, useApp, useDatos, usePorPartes } from './ui';
 
-type Integrante = { id: string; estudiante_id: string; estudiante: string };
-type Montaje = { id: string; nombre: string; profe: string; valor_vestuario: number; activo: boolean; nota: string; integrantes: Integrante[]; cantidad: number; esperado: number };
+type Integrante = { id: string; estudiante_id: string; estudiante: string; esperado: number; pagado: number; saldo: number };
+type Montaje = { id: string; nombre: string; profe: string; valor_vestuario: number; activo: boolean; nota: string; integrantes: Integrante[]; cantidad: number; esperado: number; recogido: number; por_cobrar: number };
 type PorRevisar = { estudiante_id: string; estudiante: string; cargo: string; montajes_cargo: number; montajes_asignados: number; valor: number };
-type Lista = { es_director: boolean; valor_base: number; montajes: Montaje[]; por_revisar: PorRevisar[] };
+type Lista = { es_director: boolean; valor_base: number; montajes: Montaje[]; por_revisar: PorRevisar[]; pagado_de_mas: number; pagos_sin_montaje: number };
 
 export function Montajes() {
   const { d, error, cargando, recargar } = useDatos<Lista>('listarMontajes', {}, []);
@@ -24,7 +24,13 @@ export function Montajes() {
           <div className="cifra destacada"><span>Montajes</span><b>{activos.length}</b></div>
           <div className="cifra"><span>Integrantes</span><b>{activos.reduce((s, m) => s + m.cantidad, 0)}</b></div>
           <div className="cifra"><span>Debería recoger</span><b>{pesos(activos.reduce((s, m) => s + m.esperado, 0))}</b></div>
+          <div className="cifra"><span>Recogido</span><b>{pesos(activos.reduce((s, m) => s + m.recogido, 0))}</b></div>
+          <div className="cifra"><span>Falta por cobrar</span><b>{pesos(activos.reduce((s, m) => s + m.por_cobrar, 0))}</b></div>
         </div>
+        {(d.pagado_de_mas > 0 || d.pagos_sin_montaje > 0) && <p className="suave" style={{ fontSize: 13, marginTop: -4 }}>
+          {d.pagado_de_mas > 0 && <>Pagado de más (queda a favor de los estudiantes): {pesos(d.pagado_de_mas)}. </>}
+          {d.pagos_sin_montaje > 0 && <>Pagos de vestuario de quienes aún no tienen montaje: {pesos(d.pagos_sin_montaje)}.</>}
+        </p>}
         {d.es_director && <div className="acciones mt0" style={{ marginTop: 0, marginBottom: 14 }}>
           <button className="btn" onClick={() => setEditar('nuevo')}>+ Nuevo montaje</button>
         </div>}
@@ -71,7 +77,10 @@ function TarjetaMontaje({ m, director, onEditar, onListo }: { m: Montaje; direct
       <div className="montaje-datos">
         <div><span>Integrantes</span><b>{m.cantidad}</b></div>
         <div><span>Debería recoger</span><b>{pesos(m.esperado)}</b></div>
+        <div><span>Recogido</span><b>{pesos(m.recogido)}</b></div>
+        <div><span>Falta por cobrar</span><b className={m.por_cobrar > 0 ? 'debe' : ''}>{pesos(m.por_cobrar)}</b></div>
       </div>
+      {m.esperado > 0 && <div className="avance" title={`${Math.round(m.recogido * 100 / m.esperado)}% recogido`}><span style={{ width: `${Math.min(100, m.recogido * 100 / m.esperado)}%` }} /></div>}
       {m.nota && <p className="suave" style={{ fontSize: 13, margin: '0 0 8px' }}>{m.nota}</p>}
       <button className="btn secundario" style={{ width: '100%' }} onClick={() => setAbierto(a => !a)}>{abierto ? 'Ocultar integrantes' : `Ver y agregar integrantes`}</button>
       {abierto && <div style={{ marginTop: 12 }}>
@@ -79,7 +88,13 @@ function TarjetaMontaje({ m, director, onEditar, onListo }: { m: Montaje; direct
         {ocupado && <p className="suave" style={{ fontSize: 13 }}>Guardando…</p>}
         {!m.integrantes.length ? <p className="vacio">Sin integrantes todavía.</p> : <>
           <ul className="lista-simple integrantes">{lista.visibles.map(i => (
-            <li key={i.id}><span>{i.estudiante}</span><button className="enlace" onClick={() => setQuitar(i)}>Quitar</button></li>))}
+            <li key={i.id}>
+              <span>{i.estudiante}</span>
+              <span className="integrante-estado">
+                {i.saldo <= 0 ? <span className="chip ok">Al día</span> : <span className="chip debe">Debe {pesos(i.saldo)}</span>}
+                <button className="enlace" onClick={() => setQuitar(i)}>Quitar</button>
+              </span>
+            </li>))}
           </ul>
           {lista.verMas}
         </>}

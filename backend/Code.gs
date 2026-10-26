@@ -16,7 +16,7 @@
 // Hoja de cálculo que sirve de base de datos (Registros Vox Corpus Danza, cuenta voxcorpusdanza@gmail.com).
 const HOJA_ID = '1XWxLoazHg4dCTqvaM0E2ZQYFzcL0XjNFcp_xQ4B51p0';
 const TZ = 'America/Bogota';
-const VERSION = '1.7.1';
+const VERSION = '1.8.0';
 const SESION_SEG = 6 * 60 * 60;          // máximo que permite CacheService
 const INTENTOS_MAX = 5;                  // claves erradas antes de bloquear
 const BLOQUEO_SEG = 15 * 60;
@@ -59,7 +59,7 @@ const ANULABLES = {
 
 // Columnas que configurar() agrega si la hoja no las tiene.
 const COLUMNAS_EXTRA = {
-  'Pagos': ['anulado_por', 'anulado_en', 'tipo', 'descuento', 'motivo_descuento', 'relacionado'],
+  'Pagos': ['anulado_por', 'anulado_en', 'tipo', 'descuento', 'motivo_descuento', 'relacionado', 'montaje_id'],
   'Cargos': ['anulado_por', 'anulado_en', 'actualizado_por', 'actualizado_en', 'descuento', 'motivo_descuento', 'montajes', 'montajes_previos'],
   'Ventas tienda': ['recibido_en', 'anulado_por', 'anulado_en'],
   'Pedidos uniforme': ['anulado_por', 'anulado_en', 'valor_lista', 'descuento', 'motivo_descuento'],
@@ -230,9 +230,10 @@ function catalogos_(d, ses) {
   return {
     usuario: { nombre: ses.nombre, rol: ses.rol },
     hoy: ymd_(new Date()),
-    estudiantes: activos_(H.ESTUDIANTES).map(f => Object.assign({ id: f.id, nombre: f.nombre, plan: f.plan || '' },
+    estudiantes: (() => { const mp = montajesPorEstudiante_(); return activos_(H.ESTUDIANTES).map(f => Object.assign({ id: f.id, nombre: f.nombre, plan: f.plan || '' },
+      mp[f.id] ? { montajes: mp[f.id] } : {},
       num_(f.valor_mensual) ? { valor_mensual: num_(f.valor_mensual) } : {}, f.estado_admin ? { estado_admin: String(f.estado_admin) } : {}))
-      .sort((a, b) => a.nombre.localeCompare(b.nombre, 'es')),
+      .sort((a, b) => a.nombre.localeCompare(b.nombre, 'es')); })(),
     productos: (() => { const st = stocks_(); return activos_(H.PRODUCTOS).map(f => ({ id: f.id, nombre: f.nombre, precio: num_(f.precio),
       stock: st[f.id] ? st[f.id].stock : null })); })(),
     planes: hojaExiste_(H.PLANES) ? activos_(H.PLANES).map(f => ({ id: f.id, nombre: f.nombre, valor_mensual: num_(f.valor_mensual) })) : [],
@@ -282,6 +283,13 @@ function registrarPago_(d, ses) {
   if (norm_(concepto.nombre) === 'uniforme') {
     const ped = buscarValido_(H.PEDIDOS, d.pedido_uniforme, 'pedido de uniforme');
     p.pedido_uniforme = ped.id;
+  }
+  // Vestuario de alguien en varios montajes: se puede decir a cuál va el pago (si no, se reparte).
+  if (texto_(d.montaje_id)) {
+    if (norm_(concepto.nombre) !== norm_(CONCEPTO_VESTUARIO)) throw err_('El montaje solo aplica a pagos de ' + CONCEPTO_VESTUARIO + '.');
+    if (!q.estudiante_id || !integrantesValidos_().some(i => i.estudiante_id === q.estudiante_id && i.montaje_id === texto_(d.montaje_id)))
+      throw err_((q.estudiante || 'Esa persona') + ' no está en ese montaje.');
+    p.montaje_id = texto_(d.montaje_id);
   }
   p.id = siguienteId_(H.PAGOS, 'id', 'P', 4);
   let filas = [auditar_(p, ses)];
@@ -2202,6 +2210,71 @@ function confirmarMontajes_(d, ses) {
   return { id: c.id };
 }
 
+function montajesPorEstudiante_() {
+  if (!hojaExiste_(H.MONTAJES) || !hojaExiste_(H.INTEGRANTES)) return {};
+  const ms = indice_(tabla_(H.MONTAJES).filas.filter(f => f.id));
+  const o = {};
+  integrantesValidos_().forEach(i => { const m = ms[i.montaje_id]; if (m) (o[i.estudiante_id] = o[i.estudiante_id] || []).push({ id: m.id, nombre: m.nombre }); });
+  return o;
+}
+
+/*
+ * Cuánto ha recogido cada montaje. Por estudiante:
+ *  - lo que le toca a cada montaje es su precio, con el descuento del cargo repartido en proporción;
+ *  - los pagos con montaje escogido van a ese montaje; el resto (y lo que se devolvió o se usó en otra cosa)
+ *    se reparte en proporción a lo que le toca a cada uno;
+ *  - lo que pase de lo que le toca no cuenta como recogido del montaje: queda como "pagado de más" en el total.
+ */
+function repartoMontajes_() {
+  const ms = indice_(tabla_(H.MONTAJES).filas.filter(f => f.id));
+  const porEst = {};
+  integrantesValidos_().forEach(i => { if (ms[i.montaje_id]) (porEst[i.estudiante_id] = porEst[i.estudiante_id] || []).push(i.montaje_id); });
+  const cargos = {};
+  tabla_(H.CARGOS).filas.filter(c => esValido_(c) && norm_(c.concepto) === norm_(CONCEPTO_VESTUARIO)).forEach(c => cargos[c.estudiante_id] = c);
+  const pagos = {};
+  tabla_(H.PAGOS).filas.filter(p => esValido_(p) && p.estudiante_id && norm_(p.concepto) === norm_(CONCEPTO_VESTUARIO)).forEach(p => (pagos[p.estudiante_id] = pagos[p.estudiante_id] || []).push(p));
+  const r = { montajes: {}, pagado_de_mas: 0, sin_montaje: 0 };
+  Object.keys(ms).forEach(id => r.montajes[id] = { esperado: 0, recogido: 0, por_cobrar: 0, integrantes: {} });
+  Object.keys(porEst).forEach(eid => {
+    const ids = porEst[eid];
+    const V = ids.reduce((s, id) => s + num_(ms[id].valor_vestuario), 0);
+    const D = Math.min(V, num_((cargos[eid] || {}).descuento));
+    const toca = {}; ids.forEach(id => toca[id] = V ? num_(ms[id].valor_vestuario) * (1 - D / V) : 0);
+    const E = V - D;
+    // Los pagos se aplican en orden: el que tiene montaje va a ese; el que no, llena primero lo que le falta a cada
+    // montaje (en proporción a lo que falta); lo que sobre queda de más. Devoluciones y usos del saldo restan en proporción.
+    const ps = (pagos[eid] || []).slice().sort((x, y) => (ymd_(x.fecha) < ymd_(y.fecha) ? -1 : ymd_(x.fecha) > ymd_(y.fecha) ? 1 : tiempo_(x.registrado_en) - tiempo_(y.registrado_en)));
+    const asig = {}; ids.forEach(id => asig[id] = 0);
+    ps.forEach(p => {
+      const v = num_(p.valor);
+      if (v > 0 && p.montaje_id && asig[p.montaje_id] !== undefined) { asig[p.montaje_id] += v; return; }
+      if (v > 0) {
+        const falta = {}; let F = 0;
+        ids.forEach(id => { falta[id] = Math.max(0, toca[id] - asig[id]); F += falta[id]; });
+        const reparte = Math.min(v, F);
+        ids.forEach(id => asig[id] += F ? reparte * falta[id] / F : 0);
+        const sobra = v - reparte;
+        if (sobra > 0) ids.forEach(id => asig[id] += E ? sobra * toca[id] / E : sobra / ids.length);
+        return;
+      }
+      const total = ids.reduce((s2, id) => s2 + Math.max(0, asig[id]), 0);
+      ids.forEach(id => asig[id] += total ? v * Math.max(0, asig[id]) / total : v / ids.length);
+    });
+    ids.forEach(id => {
+      const asignado = asig[id];
+      const recogido = Math.max(0, Math.min(toca[id], asignado));
+      if (asignado > toca[id]) r.pagado_de_mas += asignado - toca[id];
+      const x = r.montajes[id];
+      x.esperado += toca[id]; x.recogido += recogido; x.por_cobrar += toca[id] - recogido;
+      x.integrantes[eid] = { esperado: Math.round(toca[id]), pagado: Math.round(recogido), saldo: Math.round(toca[id] - recogido) };
+    });
+  });
+  Object.keys(pagos).filter(eid => !porEst[eid]).forEach(eid => r.sin_montaje += sum_(pagos[eid], 'valor'));
+  Object.keys(r.montajes).forEach(id => { const x = r.montajes[id]; x.esperado = Math.round(x.esperado); x.recogido = Math.round(x.recogido); x.por_cobrar = Math.round(x.por_cobrar); });
+  r.pagado_de_mas = Math.round(r.pagado_de_mas); r.sin_montaje = Math.round(r.sin_montaje);
+  return r;
+}
+
 function listarMontajes_(d, ses) {
   if (!hojaExiste_(H.MONTAJES)) throw err_('Falta la pestaña Montajes: ejecuta "configurar" en Apps Script.');
   const montajes = tabla_(H.MONTAJES).filas.filter(f => f.id);
@@ -2217,13 +2290,17 @@ function listarMontajes_(d, ses) {
     .map(c => ({ estudiante_id: c.estudiante_id, estudiante: (est[c.estudiante_id] || {}).nombre || c.estudiante, cargo: c.id,
       montajes_cargo: num_(c.montajes_previos) || num_(c.cantidad), montajes_asignados: asignados[c.estudiante_id] || 0, valor: num_(c.valor_total) }))
     .sort((a, b) => String(a.estudiante).localeCompare(String(b.estudiante), 'es'));
+  const rep = repartoMontajes_();
   return {
     es_director: norm_(ses.rol) === 'director',
     valor_base: concepto_(CONCEPTO_VESTUARIO).valor_base,
+    pagado_de_mas: rep.pagado_de_mas, pagos_sin_montaje: rep.sin_montaje,
     montajes: montajes.map(m => {
-      const xs = (porMontaje[m.id] || []).sort((a, b) => String(a.estudiante).localeCompare(String(b.estudiante), 'es'));
+      const rm = rep.montajes[m.id] || { esperado: 0, recogido: 0, por_cobrar: 0, integrantes: {} };
+      const xs = (porMontaje[m.id] || []).map(i => Object.assign(i, rm.integrantes[i.estudiante_id] || { esperado: 0, pagado: 0, saldo: 0 }))
+        .sort((a, b) => String(a.estudiante).localeCompare(String(b.estudiante), 'es'));
       return { id: m.id, nombre: m.nombre, profe: m.profe || '', valor_vestuario: num_(m.valor_vestuario), activo: norm_(m.activo) !== 'no',
-        nota: m.nota || '', integrantes: xs, cantidad: xs.length, esperado: xs.length * num_(m.valor_vestuario) };
+        nota: m.nota || '', integrantes: xs, cantidad: xs.length, esperado: rm.esperado, recogido: rm.recogido, por_cobrar: rm.por_cobrar };
     }).sort((a, b) => (Number(b.activo) - Number(a.activo)) || String(a.nombre).localeCompare(String(b.nombre), 'es')),
     por_revisar: porRevisar,
   };

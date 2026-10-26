@@ -1,4 +1,4 @@
-export type Estudiante = { id: string; nombre: string; plan: string; valor_mensual?: number; estado_admin?: string };
+export type Estudiante = { id: string; nombre: string; plan: string; valor_mensual?: number; estado_admin?: string; montajes?: { id: string; nombre: string }[] };
 export type Producto = { id: string; nombre: string; precio: number; stock?: number | null };
 export type Plan = { id: string; nombre: string; valor_mensual: number };
 export type Descuento = { id: string; nombre: string; tipo: string; valor: number; aplica_a: string };
