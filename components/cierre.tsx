@@ -142,17 +142,21 @@ function Formulario({ d, onListo }: { d: Previa; onListo: () => void }) {
 
       {hayConteo && (
         <div className="tarjeta">
-          <h3>4. Lo que se entrega</h3>
-          <p className="suave mt0" style={{ fontSize: 14 }}>Se deja siempre la base mínima de {pesos(d.base_minima)}. La página propone entregar lo que pasa de ahí en cifra cerrada, y lo suelto queda en la base.</p>
+          <h3>4. Base y entrega</h3>
+          <p className="suave mt0" style={{ fontSize: 14 }}>La base nunca baja de {pesos(d.base_minima)}. La página propone dejar la mínima y entregar el resto en cifra cerrada. Si hoy hay mucha menuda para dar cambios, deja más base y la entrega se ajusta sola.</p>
           <div className="rejilla">
+            <Campo label="Base que se deja para el siguiente día" ayuda={`Mínimo ${pesos(d.base_minima)}`}>
+              <Monto valor={queda} onChange={v => { setEntregado(Math.max(0, real - v)); setTocado(true); }} placeholder="$ 0" />
+            </Campo>
             <Campo label="Entregar" ayuda={sugerido ? `Sugerido: ${pesos(sugerido)}` : 'No alcanza para entregar sin bajar de la base.'}>
               <Monto valor={entrega} onChange={v => { setEntregado(v); setTocado(true); }} placeholder="$ 0" />
             </Campo>
+            {tocado && entrega !== sugerido && <div className="campo" style={{ gridColumn: '1 / -1' }}><button type="button" className="enlace" onClick={() => { setTocado(false); setEntregado(0); }}>Volver a lo sugerido (base {pesos(real - sugerido)}, entregar {pesos(sugerido)})</button></div>}
             {entrega > 0 && <Campo label="¿A quién?" ancho><Segmentado opciones={['Cristian', 'Liz', 'Consignación'] as const} valor={a} onChange={setA} /></Campo>}
             {entrega > 0 && a === 'Consignación' && <Campo label="¿A qué cuenta?" ancho><Segmentado opciones={cuentasConsig} valor={cuenta} onChange={setCuenta} /></Campo>}
             {(diferencia === 0 || nota) && <Campo label="Nota (opcional)" ancho><input value={nota} onChange={e => setNota(e.target.value)} placeholder="Ej: se le entregó en la noche" /></Campo>}
           </div>
-          <div className="total-grande"><span>Queda de base para el siguiente día</span><b style={queda < d.base_minima ? { color: 'var(--error)' } : undefined}>{pesos(queda)}</b></div>
+          <div className="total-grande"><span>Se entregan {pesos(entrega)} · queda de base</span><b style={queda < d.base_minima ? { color: 'var(--error)' } : undefined}>{pesos(queda)}</b></div>
           {queda < d.base_minima && entrega === 0 && <p className="aviso info">La caja queda por debajo de la base mínima. No se entrega nada hoy.</p>}
           {problemaEntrega && <p className="aviso error">{problemaEntrega}</p>}
         </div>
