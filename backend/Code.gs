@@ -16,7 +16,7 @@
 // Hoja de cálculo que sirve de base de datos (Registros Vox Corpus Danza, cuenta voxcorpusdanza@gmail.com).
 const HOJA_ID = '1XWxLoazHg4dCTqvaM0E2ZQYFzcL0XjNFcp_xQ4B51p0';
 const TZ = 'America/Bogota';
-const VERSION = '1.7.0';
+const VERSION = '1.7.1';
 const SESION_SEG = 6 * 60 * 60;          // máximo que permite CacheService
 const INTENTOS_MAX = 5;                  // claves erradas antes de bloquear
 const BLOQUEO_SEG = 15 * 60;
@@ -2295,4 +2295,318 @@ function quitarIntegrante_(d, ses) {
   bitacora_(ses, 'quitarIntegrante', H.INTEGRANTES, i.id, { montaje: i.montaje, estudiante: i.estudiante, motivo: motivo });
   const aviso = ajustarCargoVestuario_(i.estudiante_id, ses);
   return { id: i.id, estudiante: i.estudiante, montaje: i.montaje, aviso: aviso };
+}
+
+
+// ===================================================================== carga inicial de montajes (26/10)
+/*
+ * Los grupos de la clausura que pasó Cristian el 26/10. Se ejecuta desde el editor:
+ *   revisarCargaMontajes  → no escribe nada: dice con qué estudiante coincide cada nombre y cómo cambiarían los cargos.
+ *   cargarMontajes26oct   → crea los montajes que falten y agrega los integrantes seguros. Si se corre otra vez, no duplica.
+ * Los nombres dudosos o que no aparecen no se agregan: se resuelven a mano en la pantalla de Montajes.
+ */
+const CARGA_MONTAJES_26OCT = [
+ {
+  "nombre": "Predanza",
+  "integrantes": [
+   "Arianna Colorado",
+   "Juan Sebastian Arango",
+   "Isaac Lopez",
+   "Samuel Solano",
+   "Lorenzo Torres",
+   "Antonia Álvarez",
+   "Sophie gonzalez",
+   "Maria victoria roa",
+   "Aurora Urrego",
+   "Sebas Giraldo",
+   "Ally valentina Giraldo"
+  ]
+ },
+ {
+  "nombre": "Danza Mix L",
+  "integrantes": [
+   "Samantha Colorado",
+   "Thomas Agudelo",
+   "Ismael Arango",
+   "Ana Lucia garcia",
+   "Gabriela herrera",
+   "Oriana sayab",
+   "Emiliana rojas",
+   "Isabela ruiz"
+  ]
+ },
+ {
+  "nombre": "Urbano Básico L y W",
+  "integrantes": [
+   "Mariajose Caicedo",
+   "Sofia cardona",
+   "Miguel ángel",
+   "Andrea valentina fuentes",
+   "Isabella guzman",
+   "Alicia molina",
+   "Celeste Montoya",
+   "Paulina moreno",
+   "Paula sofia parada",
+   "Mariangel ramirez",
+   "Violeta ríos",
+   "Susana rivera",
+   "Sofia rodriguez",
+   "Antonia Rueda"
+  ]
+ },
+ {
+  "nombre": "Contempo - Jazz",
+  "integrantes": [
+   "Mariajose Caicedo",
+   "Daniela gonzalez",
+   "Isabela londoño",
+   "Maria Fernanda cardona",
+   "Mariangel ramirez",
+   "Emma valentina"
+  ]
+ },
+ {
+  "nombre": "Urbano Intermedio",
+  "integrantes": [
+   "Dulce maría baena",
+   "Diogenes Alejandro",
+   "Emma valentina",
+   "Antonio rodriguez",
+   "Maximiliano tabares",
+   "Luciana valencia",
+   "Jose david zapata",
+   "Juan Angel Duque"
+  ]
+ },
+ {
+  "nombre": "Juvenil",
+  "integrantes": [
+   "Mariangel Buitrago",
+   "Julieta Cartagena",
+   "Isabella guzman",
+   "Dulce maría Loaiza",
+   "Gabriela malagon",
+   "Paulina moreno",
+   "Mariangel ramirez"
+  ]
+ },
+ {
+  "nombre": "Parents",
+  "integrantes": [
+   "Alexandra calderon",
+   "Santiago valencia",
+   "Karen correa",
+   "Juan Carlos",
+   "Natalia Salazar"
+  ]
+ },
+ {
+  "nombre": "Jazz Infantil",
+  "integrantes": [
+   "Luciana baron",
+   "Julieta baron",
+   "Mariajose Caicedo",
+   "Emma valentina",
+   "Renata Morales",
+   "María Antonia munera",
+   "Susana rivera"
+  ]
+ },
+ {
+  "nombre": "Predanza W",
+  "integrantes": [
+   "Juan sebastian Arango",
+   "Paulina claros",
+   "Arianna colorado",
+   "Matias gallo",
+   "Emma rodriguez",
+   "Macarena velez"
+  ]
+ },
+ {
+  "nombre": "Danza Mix W",
+  "integrantes": [
+   "Celeste bolivar",
+   "Ana lucia garcia",
+   "Ana lucia hernandez",
+   "Antonella santamaria",
+   "Sofia Lopera",
+   "Celeste puerta",
+   "Isabela ruiz",
+   "Amelia Sánchez",
+   "Melanie Zuluaga"
+  ]
+ },
+ {
+  "nombre": "Urbano Iniciación W y S",
+  "integrantes": [
+   "Susana Arango",
+   "Antonella franco",
+   "Salomon moreno",
+   "Celeste Ochoa",
+   "Emiliana rojas",
+   "Luciana baron",
+   "Julieta baron",
+   "Nahanbar dariana",
+   "Emiliana Montoya",
+   "Renata morales",
+   "Amalia velez",
+   "Emy Giraldo"
+  ]
+ },
+ {
+  "nombre": "Heels Intermedio",
+  "integrantes": [
+   "Laura jimenez",
+   "Maria Fernanda cardona",
+   "Mariana martinez",
+   "Julieta Cartagena",
+   "Mariangel ramirez",
+   "Gabriela malagon"
+  ]
+ },
+ {
+  "nombre": "Urbano Iniciación V",
+  "integrantes": [
+   "Juanita gonzalez",
+   "Emma Grosjean",
+   "Ana lucia hernandez",
+   "Renata morales",
+   "Salomon moreno",
+   "Celeste puerta",
+   "Susana rivera",
+   "Gretel rojas",
+   "Isabella Sánchez"
+  ]
+ },
+ {
+  "nombre": "Danza Mix S",
+  "integrantes": [
+   "Samantha colorado",
+   "Amelia arias",
+   "Elena bernal",
+   "Hanna cano",
+   "Renata lucia gil",
+   "Emilio gomez"
+  ]
+ },
+ {
+  "nombre": "Baby Danza",
+  "integrantes": [
+   "Miranda arboleda",
+   "Maria jose bermudez",
+   "Maria Antonia cortes",
+   "Emma Gaviria",
+   "Ina del mar",
+   "Aurora pineda",
+   "Celeste Samper"
+  ]
+ }
+];
+// Nombres que se escribieron distinto y ya se confirmaron (nombre en la lista → nombre en la hoja).
+const EQUIVALENCIAS_26OCT = {"ally valentina giraldo": "Ally Giraldo"};
+
+function tokensNombre_(s) {
+  return norm_(s).replace(/[^a-z0-9ñ ]/g, ' ').split(' ').filter(t => t && !PALABRAS_VACIAS_[t])
+    .reduce((a, t) => a.concat(t === 'mariajose' ? ['maria', 'jose'] : t === 'mariangel' ? ['mariangel'] : [t]), []);
+}
+
+// Con qué estudiante activo coincide un nombre de la lista: { tipo: 'igual'|'parecido'|'dudoso'|'no está', est, opciones }
+function buscarEstudiante_(nombre, estudiantes) {
+  const eq = EQUIVALENCIAS_26OCT[norm_(nombre)];
+  if (eq) { const e = estudiantes.find(x => norm_(x.nombre) === norm_(eq)); if (e) return { tipo: 'igual', est: e }; }
+  const iguales = estudiantes.filter(e => norm_(e.nombre) === norm_(nombre));
+  if (iguales.length === 1) return { tipo: 'igual', est: iguales[0] };
+  const tn = tokensNombre_(nombre);
+  const contiene = estudiantes.filter(e => { const te = tokensNombre_(e.nombre); return tn.every(t => te.some(x => x === t || (t.length >= 4 && x.indexOf(t) === 0))); });
+  if (contiene.length === 1) return { tipo: 'parecido', est: contiene[0] };
+  if (contiene.length > 1) return { tipo: 'dudoso', opciones: contiene.map(e => e.id + ' ' + e.nombre) };
+  return { tipo: 'no está' };
+}
+
+function planCargaMontajes_() {
+  const estudiantes = tabla_(H.ESTUDIANTES).filas.filter(e => e.id && norm_(e.activo) !== 'no');
+  const plan = { grupos: [], dudas: [], noEstan: [], parecidos: [], porEstudiante: {} };
+  CARGA_MONTAJES_26OCT.forEach(g => {
+    const pg = { nombre: g.nombre, ids: [] };
+    g.integrantes.forEach(n => {
+      const r = buscarEstudiante_(n, estudiantes);
+      if (r.est) {
+        if (pg.ids.indexOf(r.est.id) < 0) pg.ids.push(r.est.id);
+        (plan.porEstudiante[r.est.id] = plan.porEstudiante[r.est.id] || { nombre: r.est.nombre, montajes: [] }).montajes.push(g.nombre);
+        if (r.tipo === 'parecido') plan.parecidos.push(n + ' → ' + r.est.nombre);
+      } else if (r.tipo === 'dudoso') plan.dudas.push(g.nombre + ': "' + n + '" puede ser ' + r.opciones.join(' o '));
+      else plan.noEstan.push(g.nombre + ': "' + n + '"');
+    });
+    plan.grupos.push(pg);
+  });
+  return plan;
+}
+
+function revisarCargaMontajes() {
+  nuevaLectura_();
+  const plan = planCargaMontajes_();
+  const cargos = tabla_(H.CARGOS).filas.filter(c => esValido_(c) && norm_(c.concepto) === norm_(CONCEPTO_VESTUARIO));
+  const porEst = {}; cargos.forEach(c => porEst[c.estudiante_id] = c);
+  const valor = concepto_(CONCEPTO_VESTUARIO).valor_base;
+  let suben = [], nuevos = [], iguales = 0, antesTotal = 0, despuesTotal = 0, bajarian = [];
+  Object.keys(plan.porEstudiante).forEach(id => {
+    const x = plan.porEstudiante[id], c = porEst[id], n = x.montajes.length;
+    const nuevo = n * valor - (c ? num_(c.descuento) : 0);
+    if (!c) { nuevos.push(x.nombre + ' (' + n + ')'); despuesTotal += nuevo; return; }
+    antesTotal += num_(c.valor_total);
+    if (n < num_(c.cantidad)) { bajarian.push(x.nombre + ': cargo de ' + c.cantidad + ', en la lista ' + n); despuesTotal += num_(c.valor_total); return; }
+    despuesTotal += nuevo;
+    if (n > num_(c.cantidad)) suben.push(x.nombre + ': de ' + c.cantidad + ' a ' + n); else iguales++;
+  });
+  const sinLista = cargos.filter(c => !plan.porEstudiante[c.estudiante_id] && num_(c.valor_total) > 0).map(c => c.estudiante);
+  const existentes = tabla_(H.MONTAJES).filas.filter(f => f.id).map(f => f.nombre + (norm_(f.activo) === 'no' ? ' (archivado)' : ''));
+  const nuevosM = plan.grupos.filter(g => !tabla_(H.MONTAJES).filas.some(f => f.id && norm_(f.nombre) === norm_(g.nombre))).map(g => g.nombre);
+  const lineas = [
+    'Montajes que ya hay en la hoja: ' + (existentes.length ? existentes.join(', ') : 'ninguno'),
+    'Montajes que se crearían: ' + nuevosM.length + (nuevosM.length ? ' (' + nuevosM.join(', ') + ')' : ''),
+    'Montajes: ' + plan.grupos.length + ' · asignaciones: ' + plan.grupos.reduce((s, g) => s + g.ids.length, 0) + ' · estudiantes distintos: ' + Object.keys(plan.porEstudiante).length,
+    'Nombres escritos distinto (se toman así): ' + plan.parecidos.length, ...plan.parecidos.map(x => '   ' + x),
+    'Dudosos (no se agregan): ' + plan.dudas.length, ...plan.dudas.map(x => '   ' + x),
+    'No están en la lista de estudiantes (no se agregan): ' + plan.noEstan.length, ...plan.noEstan.map(x => '   ' + x),
+    'Cargos que se crean (no tenían): ' + nuevos.length, ...nuevos.map(x => '   ' + x),
+    'Cargos que suben por estar en más montajes: ' + suben.length, ...suben.map(x => '   ' + x),
+    'Cargos que quedan igual: ' + iguales,
+    'Tenían más montajes en el cargo que en la lista (el cargo no baja, quedan por asignar): ' + bajarian.length, ...bajarian.map(x => '   ' + x),
+    'Tienen cargo de vestuario pero no aparecen en ningún grupo: ' + sinLista.length, ...sinLista.map(x => '   ' + x),
+    'Total de cargos de vestuario de estos estudiantes: antes ' + pesos_(antesTotal) + ' → después ' + pesos_(despuesTotal),
+  ];
+  const msg = lineas.join('\n');
+  console.log(msg);
+  return msg;
+}
+
+function cargarMontajes26oct() {
+  nuevaLectura_();
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(30000)) throw err_('Hay alguien guardando. Intenta en un momento.');
+  try {
+    const ses = { nombre: 'Carga de montajes 26/10', rol: 'director' };
+    const plan = planCargaMontajes_();
+    let creados = 0, agregados = 0, ya = 0;
+    const avisos = [];
+    plan.grupos.forEach(g => {
+      let m = tabla_(H.MONTAJES).filas.find(f => f.id && norm_(f.nombre) === norm_(g.nombre));
+      if (!m) { guardarMontaje_({ nombre: g.nombre }, ses); creados++; m = tabla_(H.MONTAJES).filas.find(f => f.id && norm_(f.nombre) === norm_(g.nombre)); }
+      g.ids.forEach(id => {
+        if (integrantesValidos_().some(i => i.montaje_id === m.id && i.estudiante_id === id)) { ya++; return; }
+        const r = agregarIntegrante_({ montaje_id: m.id, estudiante_id: id }, ses);
+        agregados++;
+        if (r.aviso) avisos.push(r.aviso);
+      });
+    });
+    SpreadsheetApp.flush();
+    nuevaLectura_();
+    const pend = listarMontajes_({}, ses).por_revisar;
+    const msg = 'Montajes creados: ' + creados + ' · integrantes agregados: ' + agregados + (ya ? ' · ya estaban: ' + ya : '') +
+      (plan.dudas.length + plan.noEstan.length ? '\nSin agregar (revisar a mano): ' + plan.dudas.concat(plan.noEstan).join(' | ') : '') +
+      '\nQuedan por asignar: ' + pend.length + (pend.length ? '\n' + pend.map(x => '   ' + x.estudiante + ': cargo de ' + x.montajes_cargo + ', asignados ' + x.montajes_asignados).join('\n') : '');
+    console.log(msg);
+    return msg;
+  } finally { lock.releaseLock(); }
 }
