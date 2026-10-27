@@ -16,7 +16,7 @@
 // Hoja de cálculo que sirve de base de datos (Registros Vox Corpus Danza, cuenta voxcorpusdanza@gmail.com).
 const HOJA_ID = '1XWxLoazHg4dCTqvaM0E2ZQYFzcL0XjNFcp_xQ4B51p0';
 const TZ = 'America/Bogota';
-const VERSION = '1.9.0';
+const VERSION = '1.10.0';
 const SESION_SEG = 6 * 60 * 60;          // máximo que permite CacheService
 const INTENTOS_MAX = 5;                  // claves erradas antes de bloquear
 const BLOQUEO_SEG = 15 * 60;
@@ -1089,6 +1089,7 @@ function resumen_(d) {
       pago_profes: sum_(profes, 'total'), por_profe: agrupar_(profes, 'profe', 'total') },
     neto: filtro ? null : total - salidas,
     efectivo_neto_caja: caja,
+    caja: filtro ? null : cajaRango_(rango),
     traslados: filtro ? [] : tras.map(limpio_),
     movimientos: entradas.slice(0, 1500),
   };
@@ -2021,14 +2022,16 @@ function cierresValidos_() {
 }
 
 // Movimientos de efectivo de la caja que le tocan a un cierre con fecha "hasta" (yyyy-MM-dd).
-function movimientosCaja_(prev, hasta) {
+// Con "desde" (y sin cierre anterior) son simplemente los de esas fechas.
+function movimientosCaja_(prev, hasta, desde) {
   const prevF = prev ? ymd_(prev.fecha) : null;
   const prevT = prev ? tiempo_(prev.registrado_en) : 0;
   const toca = f => {
     if (!esValido_(f) || !f.fecha) return false;
     const fe = ymd_(f.fecha);
     if (fe > hasta) return false;
-    if (!prev) return fe === hasta;           // primer cierre: solo lo del día
+    if (desde && fe < desde) return false;
+    if (!prev) return desde ? true : fe === hasta;   // primer cierre: solo lo del día
     return !(tiempo_(f.registrado_en) <= prevT && fe <= prevF);
   };
   const m = [];
@@ -2117,6 +2120,41 @@ function cerrarCaja_(d, ses) {
   insertar_(H.CIERRES, [c]);
   bitacora_(ses, 'cerrarCaja', H.CIERRES, c.id, { fecha: p.fecha, esperado: esperado, contado: contado, diferencia: diferencia, entregado: entregado, a: a + (cuenta ? ' (' + cuenta + ')' : ''), base_siguiente: baseSig });
   return { id: c.id, fecha: p.fecha, diferencia: diferencia, entregado: entregado, base_siguiente: baseSig };
+}
+
+/*
+ * La caja en unas fechas, como un estado de cuenta: base con que abrió + entró − salió − lo entregado en los
+ * cierres (± sus diferencias) = lo que quedó. La base y el saldo final salen de los cierres, con la misma regla
+ * que usa el cierre de caja, así los dos nunca dan cifras distintas.
+ */
+function diaAntes_(ymd) {
+  const p = ymd.split('-').map(Number);
+  return ymd_(new Date(p[0], p[1] - 1, p[2] - 1, 12));
+}
+
+function cajaRango_(r) {
+  const cs = cierresValidos_();
+  const antes = cs.filter(c => ymd_(c.fecha) < r.desde);
+  const prev = antes[antes.length - 1] || null;
+  const hastaFin = cs.filter(c => ymd_(c.fecha) <= r.hasta);
+  const ultimo = hastaFin[hastaFin.length - 1] || null;
+  const enRango = cs.filter(c => ymd_(c.fecha) >= r.desde && ymd_(c.fecha) <= r.hasta);
+  const mov = movimientosCaja_(null, r.hasta, r.desde);
+  let base = null, base_de = '';
+  if (prev) { base = num_(prev.base_siguiente) + movimientosCaja_(prev, diaAntes_(r.desde)).neto; base_de = ymd_(prev.fecha); }
+  else if (enRango.length && ymd_(enRango[0].fecha) === r.desde) { base = num_(enRango[0].base_inicial); base_de = 'inicial'; }
+  const entregado = sum_(enRango, 'entregado');
+  const o = {
+    base_inicial: base, base_de: base_de, entradas: mov.entradas, salidas: mov.salidas, neto: mov.neto,
+    por_tipo_entradas: mov.por_tipo_entradas, por_tipo_salidas: mov.por_tipo_salidas,
+    entregado: entregado, entregas: enRango.filter(c => num_(c.entregado) > 0).map(c => ({ fecha: ymd_(c.fecha), valor: num_(c.entregado), a: c.entregado_a + (c.cuenta_destino ? ' (' + c.cuenta_destino + ')' : '') })),
+    cierres: enRango.length, cierre: null, final: null, ajuste: 0, hasta_hoy: r.hasta === ymd_(new Date()),
+  };
+  if (r.desde === r.hasta) { const c = enRango.find(x => ymd_(x.fecha) === r.hasta); if (c) o.cierre = cierreLimpio_(c); }
+  if (base === null) return o;
+  o.final = ultimo && ymd_(ultimo.fecha) >= r.desde ? num_(ultimo.base_siguiente) + movimientosCaja_(ultimo, r.hasta).neto : base + mov.neto;
+  o.ajuste = o.final - (base + mov.neto - entregado);
+  return o;
 }
 
 // Saldo real de la caja: la base del último cierre más lo que ha pasado después. null si nunca se ha cerrado.

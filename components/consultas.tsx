@@ -49,9 +49,47 @@ type Resumen = {
   salidas: null | { total: number; gastos: number; por_categoria: Record<string, number>; pago_profes: number; por_profe: Record<string, number> };
   neto: number | null;
   efectivo_neto_caja: number;
+  caja: null | CajaRango;
   traslados: { de: string; a: string; valor: number; nota: string }[];
   movimientos: Mov[];
 };
+
+type CierreDia = { contado: number; diferencia: number; entregado: number; entregado_a: string; cuenta_destino: string; base_siguiente: number };
+type CajaRango = {
+  base_inicial: number | null; base_de: string; entradas: number; salidas: number; neto: number;
+  por_tipo_entradas: Record<string, number>; por_tipo_salidas: Record<string, number>;
+  entregado: number; entregas: { fecha: string; valor: number; a: string }[]; cierres: number;
+  cierre: CierreDia | null; final: number | null; ajuste: number; hasta_hoy: boolean;
+};
+
+const detalleTipos = (o: Record<string, number>) => Object.entries(o).sort((a, b) => Math.abs(b[1]) - Math.abs(a[1])).map(([k, v]) => `${k} ${pesos(Math.abs(v))}`).join(' · ');
+
+/** La caja como un estado de cuenta: con cuánto abrió, qué entró y salió, y con cuánto quedó. */
+function BloqueCaja({ c, varios }: { c: CajaRango; varios: boolean }) {
+  const quedo = c.hasta_hoy ? 'Debería haber ahora' : 'Quedó en la caja';
+  const abrio = c.base_de === 'inicial' ? 'Base con que arrancó la caja' : `Base con que abrió${c.base_de ? ` (cierre del ${fechaCorta(c.base_de)}${varios ? '' : ' y lo que pasó después'})` : ''}`;
+  return (
+    <div className="tarjeta estado-caja">
+      <h3 className="mt0">Caja (efectivo)</h3>
+      <ul className="lista-simple">
+        {c.base_inicial !== null && <li><span>{abrio}</span><b className="monto">{pesos(c.base_inicial)}</b></li>}
+        <li><span>+ Entró en efectivo{c.entradas > 0 && <small className="suave">{detalleTipos(c.por_tipo_entradas)}</small>}</span><b className="monto">{pesos(c.entradas)}</b></li>
+        <li><span>− Salió de la caja{c.salidas > 0 && <small className="suave">{detalleTipos(c.por_tipo_salidas)}</small>}</span><b className="monto">{c.salidas > 0 ? '−' + pesos(c.salidas) : pesos(0)}</b></li>
+        {c.base_inicial !== null && c.entregado > 0 && <li><span>− Entregado en {c.entregas.length > 1 ? 'los cierres' : 'el cierre'}<small className="suave">{c.entregas.map(e => `${varios ? fechaCorta(e.fecha) + ': ' : ''}${pesos(e.valor)} a ${e.a}`).join(' · ')}</small></span><b className="monto">−{pesos(c.entregado)}</b></li>}
+        {c.base_inicial !== null && c.ajuste !== 0 && <li><span>{c.ajuste > 0 ? '+ Sobró' : '− Faltó'} al contar en {c.cierres > 1 ? 'los cierres' : 'el cierre'}</span><b className="monto">{c.ajuste > 0 ? pesos(c.ajuste) : '−' + pesos(-c.ajuste)}</b></li>}
+        {c.final !== null
+          ? <li className="total"><span>= {quedo}</span><b className={'monto' + (c.final < 0 ? ' negativo' : '')}>{pesos(c.final)}</b></li>
+          : <li className="total"><span>= Movimiento de la caja</span><b className={'monto' + (c.neto < 0 ? ' negativo' : '')}>{pesos(c.neto)}</b></li>}
+      </ul>
+      {c.base_inicial === null && <p className="nota-caja">Todavía no hay un cierre de caja antes de estas fechas, así que no se sabe con cuánta base arrancó. Aquí solo se ve lo que entró y salió.</p>}
+      {c.base_inicial !== null && c.neto < 0 && <p className="nota-caja">Salió más efectivo del que entró: la diferencia ({pesos(-c.neto)}) se pagó con la base.</p>}
+      {c.cierre && <p className="nota-caja ok">
+        Cierre del día: se contaron {pesos(c.cierre.contado)} ({c.cierre.diferencia === 0 ? 'cuadró' : c.cierre.diferencia > 0 ? `sobraron ${pesos(c.cierre.diferencia)}` : `faltaron ${pesos(-c.cierre.diferencia)}`})
+        {c.cierre.entregado > 0 ? `, se entregaron ${pesos(c.cierre.entregado)} a ${c.cierre.entregado_a}${c.cierre.cuenta_destino ? ` (${c.cierre.cuenta_destino})` : ''}` : ''} y quedaron {pesos(c.cierre.base_siguiente)} de base.
+      </p>}
+    </div>
+  );
+}
 
 const finDeMes = (mes: string) => { const [a, m] = mes.split('-').map(Number); const ultimo = new Date(Date.UTC(a, m, 0)).getUTCDate(); const f = `${mes}-${String(ultimo).padStart(2, '0')}`; return f > hoy() ? hoy() : f; };
 const mesAnterior = () => { const [a, m] = hoy().split('-').map(Number); return m === 1 ? `${a - 1}-12` : `${a}-${String(m - 1).padStart(2, '0')}`; };
@@ -73,8 +111,13 @@ export function Hoy() {
     const base = cat.conceptos.map(c => c.nombre).filter(n => norm(n) !== 'cuenta tienda');
     return [...new Set([...base, 'Tienda', ...(d?.grupos || [])])].sort((a, b) => a.localeCompare(b, 'es'));
   }, [cat.conceptos, d?.grupos]);
-  const titulo = periodo === 'Día' ? (dia === hoy() ? 'hoy' : fechaCorta(dia)) : periodo === 'Mes' ? nombreMes(mes) : `${fechaCorta(r.desde)} al ${fechaCorta(r.hasta)}`;
-  const varios = r.desde !== r.hasta;
+  // El título sale de las fechas de los datos que se están mostrando, no de lo que se acaba de escoger:
+  // mientras llegan los nuevos, los números viejos se ven atenuados pero con su propio título.
+  const fd = d ? { desde: d.desde, hasta: d.hasta } : r;
+  const titulo = fd.desde === fd.hasta ? (fd.desde === hoy() ? 'hoy' : fechaCorta(fd.desde))
+    : fd.desde.endsWith('-01') && fd.hasta === finDeMes(fd.desde.slice(0, 7)) ? nombreMes(fd.desde.slice(0, 7)) : `${fechaCorta(fd.desde)} al ${fechaCorta(fd.hasta)}`;
+  const varios = fd.desde !== fd.hasta;
+  const viejo = !!d && (cargando || d.desde !== r.desde || d.hasta !== r.hasta);
   const detalle = usePorPartes(d?.movimientos || [], 50, r.desde + r.hasta + concepto);
   return (
     <Pantalla titulo="Resumen" sub="Lo que entró y salió en un día, un mes o entre dos fechas">
@@ -98,14 +141,16 @@ export function Hoy() {
       </div>
       {error && <ErrorCaja msg={error} reintentar={recargar} />}
       {cargando && !d && <Cargando />}
-      {d && <>
+      {viejo && <p className="actualizando-aviso">Actualizando…</p>}
+      {d && <div className={viejo ? 'actualizando' : ''}>
         <div className="cifras">
           <Cifra t={concepto ? `Entró por ${concepto} (${titulo})` : `Entró (${titulo})`} v={pesos(d.entradas.total)} destacada />
           {d.salidas && <Cifra t="Salió (gastos y profes)" v={pesos(d.salidas.total)} />}
-          {d.neto !== null && <Cifra t="Quedó" v={pesos(d.neto)} />}
-          {!concepto && periodo === 'Día' && <Cifra t="Efectivo neto en caja" v={pesos(d.efectivo_neto_caja)} />}
+          {d.neto !== null && d.salidas && <div className="cifra"><span>Resultado</span><b className={d.neto < 0 ? 'negativo' : ''}>{pesos(d.neto)}</b>
+            <small>{d.neto < 0 ? `Salió más de lo que entró${d.salidas.pago_profes > 0 ? ` (incluye ${pesos(d.salidas.pago_profes)} de pagos a profes)` : ''}` : 'Entró menos salió'}</small></div>}
           {concepto && <Cifra t="De eso, entró a la caja" v={pesos(d.efectivo_neto_caja)} />}
         </div>
+        {d.caja && <BloqueCaja c={d.caja} varios={varios} />}
         <div className="rejilla">
           {!concepto && <div className="tarjeta"><h3>Por concepto</h3>
             {!Object.keys(d.entradas.por_concepto).length ? <p className="vacio">Nada.</p> :
@@ -146,7 +191,7 @@ export function Hoy() {
           {detalle.verMas}
           {d.movimientos.length < d.entradas.cantidad && <p className="suave" style={{ fontSize: 13 }}>Hay {d.entradas.cantidad} registros; aquí llegan los {d.movimientos.length} más recientes. Escoge un concepto o menos días para ver el resto.</p>}
         </div>
-      </>}
+      </div>}
     </Pantalla>
   );
 }
