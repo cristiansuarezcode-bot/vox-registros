@@ -182,7 +182,8 @@ function YaCerrado({ d, onListo }: { d: Previa; onListo: () => void }) {
         <li><span>Debería haber</span><b className="monto">{pesos(c.esperado)}</b></li>
         <li><span>Se contó</span><b className="monto">{pesos(c.contado)}</b></li>
         <li><span>{c.diferencia === 0 ? 'Cuadró' : c.diferencia < 0 ? 'Faltó' : 'Sobró'}</span><b className="monto" style={c.diferencia < 0 ? { color: 'var(--error)' } : undefined}>{c.diferencia === 0 ? '✓' : pesos(Math.abs(c.diferencia))}</b></li>
-        <li><span>Se entregó{c.entregado ? ` a ${c.entregado_a}${c.cuenta_destino ? ` (${c.cuenta_destino})` : ''}` : ''}</span><b className="monto">{pesos(c.entregado)}</b></li>
+        {c.entregado ? <li><span>Se entregó a {c.entregado_a}{c.cuenta_destino ? ` (${c.cuenta_destino})` : ''}</span><b className="monto">{pesos(c.entregado)}</b></li>
+          : <li><span>No se entregó nada: todo quedó de base</span><b className="monto">{pesos(0)}</b></li>}
         <li><span><b>Base para el siguiente día</b></span><b className="monto">{pesos(c.base_siguiente)}</b></li>
       </ul>
       {c.nota && <p className="suave" style={{ fontSize: 14 }}>Nota: {c.nota}</p>}
@@ -208,7 +209,7 @@ function Historial({ cierres }: { cierres: Cierre[] }) {
               <td data-label="Día"><b>{fechaCorta(c.fecha)}</b>{c.nota && <><br /><small className="suave">{c.nota}</small></>}</td>
               <td className="num" data-label="Contado">{pesos(c.contado)}</td>
               <td className="num" data-label="Diferencia" style={c.diferencia < 0 ? { color: 'var(--error)' } : undefined}>{c.diferencia === 0 ? 'Cuadró' : (c.diferencia > 0 ? '+' : '') + pesos(c.diferencia)}</td>
-              <td data-label="Entregado">{c.entregado ? `${pesos(c.entregado)} · ${c.entregado_a}${c.cuenta_destino ? ` (${c.cuenta_destino})` : ''}` : '—'}</td>
+              <td data-label="Entregado">{c.entregado ? `${pesos(c.entregado)} · ${c.entregado_a}${c.cuenta_destino ? ` (${c.cuenta_destino})` : ''}` : <span className="suave">No se entregó (quedó de base)</span>}</td>
               <td className="num" data-label="Base siguiente">{pesos(c.base_siguiente)}</td>
             </tr>))}
           </tbody>

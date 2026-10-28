@@ -16,7 +16,7 @@
 // Hoja de cálculo que sirve de base de datos (Registros Vox Corpus Danza, cuenta voxcorpusdanza@gmail.com).
 const HOJA_ID = '1XWxLoazHg4dCTqvaM0E2ZQYFzcL0XjNFcp_xQ4B51p0';
 const TZ = 'America/Bogota';
-const VERSION = '1.10.0';
+const VERSION = '1.11.0';
 const SESION_SEG = 6 * 60 * 60;          // máximo que permite CacheService
 const INTENTOS_MAX = 5;                  // claves erradas antes de bloquear
 const BLOQUEO_SEG = 15 * 60;
@@ -30,6 +30,11 @@ const H = {
   MONTAJES: 'Montajes', INTEGRANTES: 'Integrantes montaje', COSTOS: 'Costos montaje',
 };
 const SALDO_FAVOR = 'Saldo a favor';
+// Dos "cuentas" que no son cuentas de verdad: no tienen saldo ni aparecen en Cuentas.
+//  - Lo que una familia le paga directamente a un proveedor o tercero (la plata no pasa por la academia).
+//  - Efectivo de la academia que Cristian o Liz tienen por fuera de la caja (lo que se les entregó en los cierres).
+const PAGO_DIRECTO = 'Directo al proveedor';
+const FUERA_CAJA = 'Efectivo por fuera de la caja';
 const CAMBIO_NO_DEVUELTO = 'Cambio no devuelto';
 
 // Pestañas que configurar() crea si no existen.
@@ -67,7 +72,7 @@ const COLUMNAS_EXTRA = {
   'Ventas tienda': ['recibido_en', 'anulado_por', 'anulado_en'],
   'Pedidos uniforme': ['anulado_por', 'anulado_en', 'valor_lista', 'descuento', 'motivo_descuento'],
   'Pago profes': ['anulado_por', 'anulado_en'],
-  'Gastos': ['anulado_por', 'anulado_en', 'montaje_id', 'costo_id'],
+  'Gastos': ['anulado_por', 'anulado_en', 'montaje_id', 'costo_id', 'relacionado'],
   'Traslados': ['anulado_por', 'anulado_en'],
   'Usuarios': ['clave_nueva', 'sesion_v'],
   'Estudiantes': ['actualizado_por', 'actualizado_en', 'supabase_id', 'estado_admin', 'valor_mensual', 'sincronizado_en'],
@@ -108,6 +113,7 @@ const ACCIONES = {
   resumen:             [resumen_, false],
   previaCierre:        [previaCierre_, false],
   listarMontajes:      [listarMontajes_, false],
+  opcionesPagoDirecto: [opcionesPagoDirecto_, false],
   guardarMontaje:      [guardarMontaje_, true],
   agregarIntegrante:   [agregarIntegrante_, true],
   quitarIntegrante:    [quitarIntegrante_, true],
@@ -278,12 +284,13 @@ function registrarPago_(d, ses) {
   const q = quien_(d);
   const concepto = concepto_(d.concepto);
   const conSaldo = esSaldo_(d.metodo);
+  const directo = !conSaldo && norm_(d.recibido_en) === norm_(PAGO_DIRECTO);
   const metodo = conSaldo ? SALDO_FAVOR : enLista_(d.metodo, 'metodo_pago', 'método de pago');
   const p = Object.assign({
     fecha: fecha_(d.fecha), estudiante_id: q.estudiante_id, estudiante: q.estudiante, persona: q.persona,
     concepto: concepto.nombre, valor: monto_(d.valor), metodo: metodo,
-    recibido_en: conSaldo ? '' : cuentaActiva_(d.recibido_en, 'recibido en'), pedido_uniforme: '', nota: texto_(d.nota),
-    tipo: conSaldo ? 'Pago con saldo a favor' : '',
+    recibido_en: conSaldo ? '' : directo ? PAGO_DIRECTO : cuentaActiva_(d.recibido_en, 'recibido en'), pedido_uniforme: '', nota: texto_(d.nota),
+    tipo: conSaldo ? 'Pago con saldo a favor' : directo ? 'Pago directo' : '',
   }, descuento_(d, null));
   if (norm_(concepto.nombre) === 'uniforme') {
     const ped = buscarValido_(H.PEDIDOS, d.pedido_uniforme, 'pedido de uniforme');
@@ -296,13 +303,59 @@ function registrarPago_(d, ses) {
       throw err_((q.estudiante || 'Esa persona') + ' no está en ese montaje.');
     p.montaje_id = texto_(d.montaje_id);
   }
+  const gastoDirecto = directo ? gastoDePagoDirecto_(p, d) : null;
   p.id = siguienteId_(H.PAGOS, 'id', 'P', 4);
   let filas = [auditar_(p, ses)];
   if (conSaldo) filas = filas.concat(consumirSaldo_(q, p.valor, { concepto: p.concepto, pedido: p.pedido_uniforme }, p.fecha, ses,
     'Usado para pagar ' + p.concepto + (p.pedido_uniforme ? ' ' + p.pedido_uniforme : ''), numeroId_(p.id) + 1, p.id));
   insertar_(H.PAGOS, filas);
   bitacora_(ses, 'registrarPago', H.PAGOS, p.id, Object.assign({}, p, { saldo_usado_de: filas.slice(1).map(f => f.concepto + ' ' + f.valor) }));
-  return { id: p.id, movimientos: filas.length };
+  if (gastoDirecto) {
+    gastoDirecto.relacionado = p.id;
+    gastoDirecto.id = siguienteId_(H.GASTOS, 'id', 'G', 4);
+    insertar_(H.GASTOS, [auditar_(gastoDirecto, ses)]);
+    bitacora_(ses, 'pagoDirecto', H.GASTOS, gastoDirecto.id, gastoDirecto);
+  }
+  return { id: p.id, movimientos: filas.length, gasto: gastoDirecto ? gastoDirecto.id : '' };
+}
+
+/*
+ * Pago directo: la familia le pagó directamente al proveedor (o al hotel, etc.). Queda el pago del estudiante
+ * y, por el mismo valor, el gasto que se pagó por la academia. Ninguno mueve una cuenta: la plata no pasó por aquí.
+ * En vestuario el gasto es un abono al costo del proveedor del montaje.
+ */
+function gastoDePagoDirecto_(p, d) {
+  const quien = p.estudiante || p.persona;
+  const categorias = listas_()['categoria_gasto'] || [];
+  const cat = n => categorias.find(o => norm_(o) === norm_(n)) || categorias.find(o => norm_(o) === 'otro') || n;
+  const g = { fecha: p.fecha, valor: p.valor, pagado_desde: PAGO_DIRECTO, nota: 'Pagó ' + quien + ' directamente', montaje_id: '', costo_id: '' };
+  if (norm_(p.concepto) === norm_(CONCEPTO_VESTUARIO)) {
+    const c = costosValidos_().find(x => x.id === texto_(d.costo_id));
+    if (!c) throw err_('Escoge a qué proveedor le pagaron. Si no aparece, Cristian o Liz deben registrar primero el costo del vestuario de ese montaje.');
+    if (!p.estudiante_id || !integrantesValidos_().some(i => i.estudiante_id === p.estudiante_id && i.montaje_id === c.montaje_id))
+      throw err_((p.estudiante || 'Esa persona') + ' no está en el montaje ' + c.montaje + '.');
+    const pendiente = num_(c.valor) - sum_(abonosDeCosto_(c.id), 'valor');
+    if (p.valor > pendiente) throw err_('A ' + c.proveedor + ' solo se le deben ' + pesos_(Math.max(0, pendiente)) + ' por el vestuario de ' + c.montaje + '. Revisa el valor o pregúntale a Cristian o Liz.');
+    p.montaje_id = c.montaje_id;
+    if (!p.nota) p.nota = 'Pagó directo a ' + c.proveedor;
+    return Object.assign(g, { categoria: cat(CATEGORIA_VESTUARIO), descripcion: 'Vestuario ' + c.montaje + ' · ' + c.proveedor + ' (pago directo de ' + quien + ')',
+      montaje_id: c.montaje_id, costo_id: c.id });
+  }
+  const a = requerido_(d.pagado_a, 'a quién le pagaron');
+  if (!p.nota) p.nota = 'Pagó directo a ' + a;
+  const porConcepto = { 'uniforme': 'Uniformes', 'cuenta tienda': 'Tienda' };
+  return Object.assign(g, { categoria: cat(porConcepto[norm_(p.concepto)] || 'Otro'), descripcion: p.concepto + ' · ' + a + ' (pago directo de ' + quien + ')' });
+}
+
+/** A qué proveedores se le puede registrar un pago directo de vestuario de este estudiante (solo nombres). */
+function opcionesPagoDirecto_(d) {
+  const ids = integrantesValidos_().filter(i => i.estudiante_id === d.estudiante_id).map(i => i.montaje_id);
+  return { proveedores: costosValidos_().filter(c => ids.indexOf(c.montaje_id) >= 0)
+    .map(c => ({ costo_id: c.id, proveedor: c.proveedor, montaje_id: c.montaje_id, montaje: c.montaje, descripcion: c.descripcion || '' })) };
+}
+
+function cuentaSalida_(nombre, campo) {
+  return norm_(nombre) === norm_(FUERA_CAJA) ? FUERA_CAJA : cuentaActiva_(nombre, campo);
 }
 
 function registrarCargo_(d, ses) {
@@ -495,7 +548,7 @@ function registrarPagoProfe_(d, ses) {
   if (!profe) throw err_('Profe no encontrado o inactivo');
   const lineas = arreglo_(d.lineas, 'líneas de clases', 10);
   const metodo = enLista_(d.metodo, 'metodo_pago', 'método de pago');
-  const desde = cuentaActiva_(d.pagado_desde, 'pagado desde');
+  const desde = cuentaSalida_(d.pagado_desde, 'pagado desde');
   const periodo = requerido_(d.periodo, 'periodo');
   const fecha = fecha_(d.fecha);
   const pago = siguienteId_(H.PAGO_PROFES, 'pago', 'PP', 3);
@@ -517,7 +570,7 @@ function registrarPagoProfe_(d, ses) {
 function registrarGasto_(d, ses) {
   const g = { id: siguienteId_(H.GASTOS, 'id', 'G', 4), fecha: fecha_(d.fecha),
     categoria: enLista_(d.categoria, 'categoria_gasto', 'categoría'), descripcion: requerido_(d.descripcion, 'descripción'),
-    valor: monto_(d.valor), pagado_desde: cuentaActiva_(d.pagado_desde, 'pagado desde'), nota: texto_(d.nota) };
+    valor: monto_(d.valor), pagado_desde: cuentaSalida_(d.pagado_desde, 'pagado desde'), nota: texto_(d.nota) };
   insertar_(H.GASTOS, [auditar_(g, ses)]);
   bitacora_(ses, 'registrarGasto', H.GASTOS, g.id, g);
   return { id: g.id };
@@ -567,6 +620,8 @@ function anular_(d, ses) {
     const abonos = abonosDeCosto_(d.id);
     if (abonos.length) throw err_('Este costo tiene ' + abonos.length + ' abono(s) al proveedor (' + abonos.map(g => g.id).join(', ') + '). Anula primero los abonos.');
   }
+  if (hoja === H.GASTOS && filas.some(f => f.relacionado))
+    throw err_('Este gasto es parte del pago directo ' + filas[0].relacionado + '. Anula ese pago y se anulan los dos.');
   if (hoja === H.GASTOS && filas.some(f => f.costo_id)) soloDirector_(ses);
   if (hoja === H.PAGOS && filas.some(f => f.tipo === 'Saldo usado' && f.relacionado))
     throw err_('Este movimiento es parte de un pago con saldo a favor (' + filas[0].relacionado + '). Anula ese pago y se devuelve todo.');
@@ -579,6 +634,13 @@ function anular_(d, ses) {
     const ligados = tp.filas.filter(p => esValido_(p) && p.relacionado && p.relacionado === d.id);
     ligados.forEach(p => actualizar_(tp, p, { estado: 'anulado', motivo_anulacion: 'Se anuló ' + d.id + ': ' + motivo, anulado_por: ses.nombre, anulado_en: ahora }));
     if (ligados.some(p => p.tipo !== 'Cambio a favor')) avisos.push('El saldo a favor que se había usado vuelve a quedar disponible.');
+    if (hoja === H.PAGOS) {
+      const tg = tabla_(H.GASTOS);
+      tg.filas.filter(g => esValido_(g) && g.relacionado && g.relacionado === d.id).forEach(g => {
+        actualizar_(tg, g, { estado: 'anulado', motivo_anulacion: 'Se anuló ' + d.id + ': ' + motivo, anulado_por: ses.nombre, anulado_en: ahora });
+        avisos.push('También se anuló el pago directo a ' + (g.descripcion.split(' · ')[1] || 'el proveedor').replace(/ \(pago directo.*$/, '') + ' (' + g.id + ').');
+      });
+    }
     ligados.filter(p => p.tipo === 'Cambio a favor').forEach(p => {
       const q = { estudiante_id: p.estudiante_id, persona: p.persona };
       const t = saldosDe_(q).items.find(i => i.origen === 'tienda');
@@ -816,7 +878,7 @@ function registrarDevolucion_(d, ses) {
   if (valor > favor) throw err_('Solo tiene ' + pesos_(favor) + ' a favor en ' + item.concepto + '.');
   const metodo = enLista_(d.metodo, 'metodo_pago', 'método');
   const p = auditar_({ id: siguienteId_(H.PAGOS, 'id', 'P', 4), fecha: fecha_(d.fecha), estudiante_id: q.estudiante_id, estudiante: q.estudiante,
-    persona: q.persona, concepto: item.concepto, valor: -valor, metodo: metodo, recibido_en: cuentaActiva_(d.pagado_desde, 'sale de'),
+    persona: q.persona, concepto: item.concepto, valor: -valor, metodo: metodo, recibido_en: cuentaSalida_(d.pagado_desde, 'sale de'),
     pedido_uniforme: item.pedido || '', nota: texto_(d.nota) || 'Devolución de saldo a favor', tipo: 'Devolución' }, ses);
   insertar_(H.PAGOS, [p]);
   bitacora_(ses, 'registrarDevolucion', H.PAGOS, p.id, p);
@@ -1202,6 +1264,7 @@ function reporteCuentas_(d) {
   });
   const caja = cajaSegunCierre_();
   if (caja && cuentas['Caja']) { cuentas['Caja'].saldo_total = caja.saldo; cuentas['Caja'].segun_cierre = caja.desde; }
+  delete cuentas[PAGO_DIRECTO]; delete cuentas[FUERA_CAJA];
   return { desde: rango.desde, hasta: rango.hasta, cuentas: Object.keys(cuentas).map(k => cuentas[k]),
     movimientos: mov.filter(m => enRango_(m.fecha, rango)).map(m => Object.assign({}, m, { fecha: ymd_(m.fecha) })).reverse().slice(0, 500) };
 }
@@ -2011,7 +2074,7 @@ function activarSincronizacionAuto() {
  * cierre y su fecha no es posterior a la de ese cierre. Así, lo que se registra tarde (después de cerrar)
  * entra en el siguiente cierre, que es cuando esa plata se cuenta.
  */
-const BASE_MINIMA_CAJA = 100000;
+const BASE_MINIMA_CAJA = 50000;
 const REDONDEO_ENTREGA = 1000;
 const ENTREGAS_CAJA = ['Cristian', 'Liz', 'Consignación'];
 
@@ -2506,7 +2569,7 @@ function abonarCostoMontaje_(d, ses) {
   const categoria = categorias.find(o => norm_(o) === norm_(CATEGORIA_VESTUARIO)) || categorias.find(o => norm_(o) === 'otro') || CATEGORIA_VESTUARIO;
   const g = { id: siguienteId_(H.GASTOS, 'id', 'G', 4), fecha: fecha_(d.fecha), categoria: categoria,
     descripcion: 'Vestuario ' + c.montaje + ' · ' + c.proveedor + (valor === pendiente ? (pagado ? ' (último abono)' : ' (pago completo)') : ' (abono)'),
-    valor: valor, pagado_desde: cuentaActiva_(d.pagado_desde, 'pagado desde'), nota: texto_(d.nota), montaje_id: c.montaje_id, costo_id: c.id };
+    valor: valor, pagado_desde: cuentaSalida_(d.pagado_desde, 'pagado desde'), nota: texto_(d.nota), montaje_id: c.montaje_id, costo_id: c.id };
   insertar_(H.GASTOS, [auditar_(g, ses)]);
   bitacora_(ses, 'abonarCostoMontaje', H.GASTOS, g.id, g);
   return { id: g.id, pendiente: pendiente - valor };

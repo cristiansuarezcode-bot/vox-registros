@@ -2,7 +2,7 @@
 import { useState } from 'react';
 import type { Quien } from '@/lib/tipos';
 import { fechaCorta, hoy, pesos } from '@/lib/util';
-import { BuscarQuien, Campo, Cargando, ErrorCaja, Modal, Monto, Pantalla, Segmentado, Selector, cuentasTodas, useAccion, useApp, useDatos, usePorPartes } from './ui';
+import { BuscarQuien, Campo, Cargando, ErrorCaja, Modal, Monto, Pantalla, Segmentado, Selector, ayudaSalida, cuentasSalida, useAccion, useApp, useDatos, usePorPartes } from './ui';
 
 type Integrante = { id: string; estudiante_id: string; estudiante: string; esperado: number; pagado: number; saldo: number };
 type Abono = { id: string; fecha: string; valor: number; pagado_desde: string; nota: string };
@@ -344,7 +344,7 @@ function AbonarCosto({ m, c, onCerrar, onListo }: { m: Montaje; c: Costo; onCerr
         <div className="acciones" style={{ gridColumn: '1 / -1', marginTop: -4 }}>
           <button className="btn secundario chico" onClick={() => setValor(c.pendiente)}>Pagar todo lo que falta</button>
         </div>
-        <Campo label="¿De dónde salió la plata?" ancho><Segmentado opciones={cuentasTodas(cat)} valor={desde} onChange={setDesde} /></Campo>
+        <Campo label="¿De dónde salió la plata?" ancho ayuda={desde === 'Caja' ? undefined : ayudaSalida(desde)}><Segmentado opciones={cuentasSalida(cat)} valor={desde} onChange={setDesde} /></Campo>
         <Campo label="Nota (opcional)" ancho><input value={nota} onChange={e => setNota(e.target.value)} placeholder="Ej: le transfirió Liz" /></Campo>
       </div>
       <div className="acciones">

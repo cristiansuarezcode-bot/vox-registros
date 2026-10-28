@@ -350,8 +350,16 @@ const esDeTienda = (c: { tipo?: string }) => norm(c.tipo || '') === 'tienda';
 export const cuentasBanco = (cat: Catalogos) => cat.cuentas.filter(c => !esDeTienda(c)).map(c => c.nombre);
 /** Cuentas a las que se transfiere lo de la tienda (si no hay ninguna marcada, las de banco). */
 export const cuentasTienda = (cat: Catalogos) => { const t = cat.cuentas.filter(esDeTienda).map(c => c.nombre); return t.length ? t : cuentasBanco(cat).filter(c => c !== 'Caja'); };
-/** Todas las cuentas activas, para salidas de plata y traslados. */
+/** Todas las cuentas activas, para traslados. */
 export const cuentasTodas = (cat: Catalogos) => cat.cuentas.map(c => c.nombre);
+/** Lo que una familia le pagó directamente al proveedor (o al hotel, etc.): no entra a ninguna cuenta. */
+export const PAGO_DIRECTO = 'Directo al proveedor';
+/** Efectivo de la academia que Cristian o Liz tienen por fuera de la caja. */
+export const FUERA_CAJA = 'Efectivo por fuera de la caja';
+/** De dónde puede salir la plata de un gasto o un pago: las cuentas y el efectivo que está por fuera de la caja. */
+export const cuentasSalida = (cat: Catalogos) => [...cuentasTodas(cat), FUERA_CAJA];
+export const ayudaSalida = (desde: string) => desde === FUERA_CAJA ? 'Efectivo que tienen Cristian o Liz (por ejemplo, lo que se les entregó en un cierre). No mueve la caja ni las cuentas del banco.'
+  : desde === 'Caja' ? 'Sale del cajón: va a aparecer en el cierre de caja del día.' : undefined;
 
 
 // ------------------------------------------------------------------ descuentos
@@ -448,7 +456,7 @@ export function DevolverSaldo({ q, item, onCerrar, onListo }: { q: Quien; item: 
         <Campo label="Valor a devolver"><Monto valor={valor} onChange={setValor} /></Campo>
         <Campo label="Fecha"><input type="date" value={fecha} max={hoy()} onChange={e => setFecha(e.target.value)} /></Campo>
         <Campo label="¿Cómo se le devolvió?" ancho><Segmentado opciones={metodos} valor={metodo} onChange={m => { setMetodo(m); setDesde(cuentaPorMetodo(m, cat)); }} /></Campo>
-        <Campo label="¿De dónde salió la plata?" ancho><Segmentado opciones={cuentasTodas(cat)} valor={desde} onChange={setDesde} /></Campo>
+        <Campo label="¿De dónde salió la plata?" ancho ayuda={ayudaSalida(desde)}><Segmentado opciones={cuentasSalida(cat)} valor={desde} onChange={setDesde} /></Campo>
         <Campo label="Nota (opcional)" ancho><input value={nota} onChange={e => setNota(e.target.value)} placeholder="Ej: se le devolvió a la mamá" /></Campo>
       </div>
       {valor > item.favor && <p className="aviso error">No puede ser más de {pesos(item.favor)}.</p>}

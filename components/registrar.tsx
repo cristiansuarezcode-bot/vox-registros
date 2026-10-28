@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from 'react';
 import type { Quien } from '@/lib/tipos';
 import { api } from '@/lib/api';
 import { hoy, mesActual, norm, pesos } from '@/lib/util';
-import { BuscarQuien, Campo, Estado, Monto, Pantalla, Segmentado, Selector, SelectorDescuento, SIN_DESCUENTO, cuentaPorMetodo, cuentasBanco, cuentasTienda, cuentasTodas, datosDescuento, datosQuien, useAccion, useApp, useSaldoFavor, type ValorDescuento } from './ui';
+import { BuscarQuien, Campo, Estado, Monto, Pantalla, Segmentado, Selector, SelectorDescuento, SIN_DESCUENTO, PAGO_DIRECTO, ayudaSalida, cuentaPorMetodo, cuentasBanco, cuentasSalida, cuentasTienda, cuentasTodas, datosDescuento, datosQuien, useAccion, useApp, useSaldoFavor, type ValorDescuento } from './ui';
 
 export const SALDO = 'Saldo a favor';
 
@@ -55,6 +55,9 @@ export function RegistrarPago() {
   const [recibido, setRecibido] = useState('Caja');
   const [pedido, setPedido] = useState('');
   const [montaje, setMontaje] = useState(''); // vestuario: a qué montaje va ('' = repartir)
+  const [costoId, setCostoId] = useState('');   // pago directo de vestuario: a qué proveedor
+  const [pagadoA, setPagadoA] = useState('');   // pago directo de otro concepto: a quién
+  const [proveedores, setProveedores] = useState<{ costo_id: string; proveedor: string; montaje: string; descripcion: string }[] | null>(null);
   const [nota, setNota] = useState('');
   const [desc, setDesc] = useState<ValorDescuento>(SIN_DESCUENTO);
   const [pedidos, setPedidos] = useState<{ pedido: string; saldo: number; estudiante_id: string; quien: string; prendas_pendientes: string[] }[]>([]);
@@ -70,6 +73,16 @@ export function RegistrarPago() {
     if (!esUniforme) return;
     api<{ filas: typeof pedidos }>('reporteSaldos', { concepto: 'Uniforme' }).then(r => setPedidos(r.filas)).catch(() => setPedidos([]));
   }, [esUniforme]);
+  const directo = recibido === PAGO_DIRECTO && !conSaldo;
+  useEffect(() => {
+    setProveedores(null); setCostoId('');
+    if (!directo || !esVestuario || !quien?.estudiante_id) return;
+    let vivo = true;
+    api<{ proveedores: NonNullable<typeof proveedores> }>('opcionesPagoDirecto', { estudiante_id: quien.estudiante_id })
+      .then(r => { if (!vivo) return; setProveedores(r.proveedores); if (r.proveedores.length === 1) setCostoId(r.proveedores[0].costo_id); })
+      .catch(() => vivo && setProveedores([]));
+    return () => { vivo = false; };
+  }, [directo, esVestuario, quien?.estudiante_id]);
   const pedidosDeQuien = useMemo(() => pedidos.filter(p => quien && (quien.estudiante_id ? p.estudiante_id === quien.estudiante_id : norm(p.quien) === norm(quien.persona))), [pedidos, quien]);
 
   const planDe = (q: Quien) => {
@@ -88,7 +101,7 @@ export function RegistrarPago() {
   const base = concepto ? valorSugerido(concepto, quien) : 0;
   const elegirConcepto = (c: string) => {
     setConcepto(c);
-    if (metodo !== SALDO && (esTienda(c) !== esTienda(concepto) || !(esTienda(c) ? ['Caja', ...cuentasTienda(cat), ...cuentasBanco(cat)] : cuentasBanco(cat)).includes(recibido))) setRecibido(cuentaPara(metodo, c));
+    if (metodo !== SALDO && (esTienda(c) !== esTienda(concepto) || !(esTienda(c) ? ['Caja', ...cuentasTienda(cat), ...cuentasBanco(cat)] : [...cuentasBanco(cat), PAGO_DIRECTO]).includes(recibido))) setRecibido(cuentaPara(metodo, c));
     setDesc(SIN_DESCUENTO);
     const v = valorSugerido(c, quien);
     if (v) setValor(v);
@@ -102,20 +115,23 @@ export function RegistrarPago() {
   };
   // Lo que se le paga a la tienda (fiados) puede entrar a Nequi; los demás conceptos, a las cuentas de la academia.
   const esTienda = (c: string) => norm(c) === 'cuenta tienda';
-  const opcionesCuenta = esTienda(concepto) ? ['Caja', ...cuentasTienda(cat), ...cuentasBanco(cat).filter(c => c !== 'Caja')] : cuentasBanco(cat);
+  const opcionesCuenta = esTienda(concepto) ? ['Caja', ...cuentasTienda(cat), ...cuentasBanco(cat).filter(c => c !== 'Caja')] : [...cuentasBanco(cat), PAGO_DIRECTO];
   const cuentaPara = (m: string, c: string) => norm(m) === 'efectivo' ? 'Caja' : esTienda(c) ? cuentasTienda(cat)[0] : cuentaPorMetodo(m, cat);
-  const elegirMetodo = (m: string) => { setMetodo(m); if (m !== SALDO) setRecibido(cuentaPara(m, concepto)); };
+  const elegirMetodo = (m: string) => { setMetodo(m); if (m !== SALDO && recibido !== PAGO_DIRECTO) setRecibido(cuentaPara(m, concepto)); };
   const elegirDescuento = (d: ValorDescuento) => { setDesc(d); if (base) setValor(base - d.descuento); };
   // Lo que puede usar: su saldo a favor sin contar el del mismo concepto que va a pagar.
   const disponible = favor.items.filter(i => i.saldo < 0 && !(norm(i.concepto) === norm(concepto) && (i.pedido || '') === (pedido || ''))).reduce((s, i) => s - i.saldo, 0);
 
-  const listo = quien && concepto && valor > 0 && metodo && (conSaldo ? valor <= disponible : recibido) && (!esUniforme || pedido) && (!desc.descuento || desc.motivo.trim());
+  const listo = quien && concepto && valor > 0 && metodo && (conSaldo ? valor <= disponible : recibido) && (!esUniforme || pedido) && (!desc.descuento || desc.motivo.trim())
+    && (!directo || (esVestuario ? !!costoId : !!pagadoA.trim()));
   const guardar = async () => {
     const r = await correr<{ id: string }>('registrarPago', { fecha, ...datosQuien(quien), concepto, valor, metodo, recibido_en: conSaldo ? '' : recibido, pedido_uniforme: pedido, nota, ...datosDescuento(desc),
-      ...(esVestuario && montaje && montajesQuien.length > 1 ? { montaje_id: montaje } : {}) });
+      ...(esVestuario && montaje && montajesQuien.length > 1 && !directo ? { montaje_id: montaje } : {}),
+      ...(directo ? (esVestuario ? { costo_id: costoId } : { pagado_a: pagadoA }) : {}) });
     if (r) {
-      aviso(`Pago guardado (${r.id}): ${quien?.nombre} · ${concepto} · ${pesos(valor)}${conSaldo ? ' con saldo a favor' : ''}`);
-      setQuien(null); setValor(0); setNota(''); setPedido(''); setMontaje(''); setDesc(SIN_DESCUENTO); setClave(k => k + 1);
+      const aQuien = directo ? (esVestuario ? proveedores?.find(p => p.costo_id === costoId)?.proveedor : pagadoA.trim()) : '';
+      aviso(`Pago guardado (${r.id}): ${quien?.nombre} · ${concepto} · ${pesos(valor)}${conSaldo ? ' con saldo a favor' : ''}${directo ? ` · pagado directo a ${aQuien}` : ''}`);
+      setQuien(null); setValor(0); setNota(''); setPedido(''); setMontaje(''); setDesc(SIN_DESCUENTO); setClave(k => k + 1); setPagadoA(''); setCostoId('');
       if (conSaldo) setMetodo(metodosBase[0] || 'Efectivo');
       const k = cat.conceptos.find(x => x.nombre === concepto);
       if (k?.valor_base && norm(concepto) !== 'mensualidad') setValor(k.valor_base);
@@ -134,13 +150,13 @@ export function RegistrarPago() {
           <Campo label="Concepto">
             <Selector valor={concepto} onChange={elegirConcepto} vacio="Escoge…" opciones={cat.conceptos.map(c => c.nombre)} />
           </Campo>
-          {esVestuario && montajesQuien.length > 1 && (
+          {esVestuario && montajesQuien.length > 1 && !directo && (
             <Campo label="¿Para qué montaje?" ancho ayuda={montaje ? 'Todo el pago va a ese montaje.' : `Se reparte entre sus ${montajesQuien.length} montajes según el precio de cada uno.`}>
               <Segmentado opciones={['Repartir', ...montajesQuien.map(m => m.nombre)]} valor={montaje ? (montajesQuien.find(m => m.id === montaje)?.nombre || 'Repartir') : 'Repartir'}
                 onChange={v => setMontaje(v === 'Repartir' ? '' : montajesQuien.find(m => m.nombre === v)?.id || '')} />
             </Campo>
           )}
-          {esVestuario && montajesQuien.length === 1 && <div className="campo" style={{ gridColumn: '1 / -1' }}><span className="ayuda" style={{ marginTop: 0 }}>Va al montaje <b>{montajesQuien[0].nombre}</b>.</span></div>}
+          {esVestuario && montajesQuien.length === 1 && !directo && <div className="campo" style={{ gridColumn: '1 / -1' }}><span className="ayuda" style={{ marginTop: 0 }}>Va al montaje <b>{montajesQuien[0].nombre}</b>.</span></div>}
           {esUniforme && (
             <Campo label="Pedido de uniforme" ayuda={quien && !pedidosDeQuien.length ? 'No tiene pedidos con saldo. Créalo en Uniformes.' : undefined}>
               <Selector valor={pedido} onChange={setPedido} vacio="Escoge el pedido…"
@@ -160,9 +176,23 @@ export function RegistrarPago() {
               </p>
             </div>
           ) : (
-            <Campo label="¿A dónde entró la plata?" ancho ayuda={metodo !== 'Efectivo' ? `Sugerida por la fecha: ${cat.cuenta_sugerida}. Cámbiala si la familia transfirió a otra.` : undefined}>
+            <Campo label="¿A dónde entró la plata?" ancho ayuda={directo ? 'La familia le pagó directamente al proveedor: no entra a ninguna cuenta. Queda su pago y, por el mismo valor, el pago al proveedor.'
+              : metodo !== 'Efectivo' ? `Sugerida por la fecha: ${cat.cuenta_sugerida}. Cámbiala si la familia transfirió a otra.` : undefined}>
               <Segmentado opciones={opcionesCuenta} valor={recibido} onChange={setRecibido} />
             </Campo>
+          )}
+          {directo && esVestuario && (
+            !quien?.estudiante_id ? <p className="aviso info" style={{ gridColumn: '1 / -1', margin: 0 }}>Escoge primero el estudiante para ver los proveedores de su montaje.</p>
+            : proveedores === null ? <p className="suave" style={{ gridColumn: '1 / -1', margin: 0, fontSize: 14 }}>Buscando los proveedores de su montaje…</p>
+            : !proveedores.length ? <p className="aviso error" style={{ gridColumn: '1 / -1', margin: 0 }}>Su montaje todavía no tiene proveedor registrado. Pídele a Cristian o a Liz que registren el costo del vestuario (en Montajes) y vuelve a intentarlo.</p>
+            : <Campo label="¿A qué proveedor le pagaron?" ancho>
+                <Segmentado opciones={proveedores.map(p => proveedores.length > 1 && montajesQuien.length > 1 ? `${p.proveedor} (${p.montaje})` : p.proveedor)}
+                  valor={(p => p ? (proveedores.length > 1 && montajesQuien.length > 1 ? `${p.proveedor} (${p.montaje})` : p.proveedor) : '')(proveedores.find(p => p.costo_id === costoId))}
+                  onChange={v => setCostoId(proveedores.find(p => p.proveedor === v || `${p.proveedor} (${p.montaje})` === v)?.costo_id || '')} />
+              </Campo>
+          )}
+          {directo && !esVestuario && (
+            <Campo label="¿A quién le pagaron?" ancho><input value={pagadoA} onChange={e => setPagadoA(e.target.value)} placeholder="Ej: Hotel Las Palmas" /></Campo>
           )}
           <Campo label="Nota (opcional)" ancho><input value={nota} onChange={e => setNota(e.target.value)} placeholder="Ej: abono, pagó la mamá…" /></Campo>
         </div>
@@ -231,7 +261,7 @@ export function PagoProfe() {
         <div className="separador" />
         <div className="rejilla">
           <Campo label="Método" ancho><Segmentado opciones={metodos} valor={metodo} onChange={setMetodo} /></Campo>
-          <Campo label="¿De dónde salió la plata?" ancho><Segmentado opciones={cuentasTodas(cat)} valor={desde} onChange={setDesde} /></Campo>
+          <Campo label="¿De dónde salió la plata?" ancho ayuda={ayudaSalida(desde)}><Segmentado opciones={cuentasSalida(cat)} valor={desde} onChange={setDesde} /></Campo>
           <Campo label="Nota (opcional)" ancho><input value={nota} onChange={e => setNota(e.target.value)} placeholder="Ej: incluye reposición del sábado" /></Campo>
         </div>
         <div className="acciones">
@@ -267,7 +297,7 @@ export function Gasto() {
           <Campo label="¿Qué se compró o pagó?"><input value={descripcion} onChange={e => setDescripcion(e.target.value)} placeholder="Ej: jabón y toallas" /></Campo>
           <Campo label="Valor"><Monto valor={valor} onChange={setValor} /></Campo>
           <Campo label="Fecha"><input type="date" value={fecha} max={hoy()} onChange={e => setFecha(e.target.value)} /></Campo>
-          <Campo label="¿De dónde salió la plata?" ancho><Segmentado opciones={cuentasTodas(cat)} valor={desde} onChange={setDesde} /></Campo>
+          <Campo label="¿De dónde salió la plata?" ancho ayuda={ayudaSalida(desde)}><Segmentado opciones={cuentasSalida(cat)} valor={desde} onChange={setDesde} /></Campo>
           <Campo label="Nota (opcional)" ancho><input value={nota} onChange={e => setNota(e.target.value)} placeholder="Ej: lo pagó Liz y se le devolvió" /></Campo>
         </div>
         <div className="acciones"><button className="btn" disabled={!categoria || !descripcion.trim() || !valor || ocupado} onClick={guardar}>{ocupado ? 'Guardando…' : 'Guardar gasto'}</button></div>
