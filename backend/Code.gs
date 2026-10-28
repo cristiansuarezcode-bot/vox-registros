@@ -2887,3 +2887,40 @@ function cargarMontajes26oct() {
     return msg;
   } finally { lock.releaseLock(); }
 }
+
+
+// ===================================================================== corrección 28/10 (se ejecuta una vez desde el editor)
+/*
+ * Liz registró el pago completo a La Media Naranja ($329.000, vestuario de Baby Danza) saliendo de Caja,
+ * pero esa plata no salió del cajón: era efectivo por fuera de la caja (lo que se entregó en el cierre del 27).
+ * Se anula ese gasto con su motivo y se registra igual, pero desde "Efectivo por fuera de la caja".
+ * Si se corre otra vez, no hace nada.
+ */
+function corregirPagoMediaNaranja28oct() {
+  nuevaLectura_();
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(30000)) throw err_('Hay alguien guardando. Intenta en un momento.');
+  try {
+    const ses = { nombre: 'Corrección 28/10 (pedida por Cristian)', rol: 'director' };
+    const tg = tabla_(H.GASTOS);
+    const g = tg.filas.find(f => f.id === 'G0005');
+    if (!g) throw err_('No encontré el gasto G0005.');
+    const nuevoYa = tg.filas.find(f => esValido_(f) && f.costo_id === 'CM001' && f.pagado_desde === FUERA_CAJA && num_(f.valor) === 329000);
+    if (!esValido_(g) && nuevoYa) { console.log('Ya estaba corregido (' + nuevoYa.id + ').'); return 'Ya estaba corregido'; }
+    if (!esValido_(g)) throw err_('G0005 ya estaba anulado y no encontré el registro nuevo: revisar a mano.');
+    if (g.costo_id !== 'CM001' || num_(g.valor) !== 329000 || g.pagado_desde !== 'Caja') throw err_('G0005 no es el pago que se esperaba: no se cambia nada.');
+    const motivo = 'Se registró saliendo de Caja, pero era efectivo por fuera de la caja (entregado en el cierre del 27/10)';
+    actualizar_(tg, g, { estado: 'anulado', motivo_anulacion: motivo, anulado_por: ses.nombre, anulado_en: new Date() });
+    bitacora_(ses, 'anular', H.GASTOS, g.id, { motivo: motivo, lineas: 1 });
+    const n = { id: siguienteId_(H.GASTOS, 'id', 'G', 4), fecha: g.fecha, categoria: g.categoria, descripcion: g.descripcion, valor: num_(g.valor),
+      pagado_desde: FUERA_CAJA, nota: 'Reemplaza a ' + g.id + ' (lo registró ' + g.registrado_por + '; corregida la cuenta)', montaje_id: g.montaje_id, costo_id: g.costo_id, relacionado: '' };
+    const fila = auditar_(n, ses);
+    fila.registrado_por = g.registrado_por;   // lo pagó/registró Liz; la corrección queda en la nota y en la bitácora
+    insertar_(H.GASTOS, [fila]);
+    bitacora_(ses, 'corregirPagoMediaNaranja28oct', H.GASTOS, n.id, { reemplaza: g.id, antes: 'Caja', ahora: FUERA_CAJA, valor: n.valor });
+    SpreadsheetApp.flush();
+    const msg = 'Listo: ' + g.id + ' anulado y registrado de nuevo como ' + n.id + ' desde "' + FUERA_CAJA + '". La caja ya no lo descuenta y La Media Naranja sigue a paz y salvo.';
+    console.log(msg);
+    return msg;
+  } finally { lock.releaseLock(); }
+}
