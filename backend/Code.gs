@@ -2924,3 +2924,52 @@ function corregirPagoMediaNaranja28oct() {
     return msg;
   } finally { lock.releaseLock(); }
 }
+
+
+// ===================================================================== correcciones de cuentas 28/10 (una vez, desde el editor)
+/*
+ * Revisión del 28/10 con Cristian:
+ *  1. P0178, P0179 y P0180 (vestuarios de Luciana Barón, Julieta Barón y Hanna Cano, 22/10) son transferencias que
+ *     entraron a la cuenta de Majo (lo dice la nota del retiro X006 del 23/10), pero quedaron registradas en Caja.
+ *     Se cambia la cuenta a Cuenta Majo. Son de antes del primer cierre, así que ningún cierre cambia.
+ *  2. X004 (retiro de $100.000 de la cuenta de Majo, 22/10) lo registró la revisión del 22/10 y Majo registró el mismo
+ *     retiro como X005. Se anula X004 por duplicado.
+ * Si se corre otra vez, no hace nada.
+ */
+function correccionesCuentas28oct() {
+  nuevaLectura_();
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(30000)) throw err_('Hay alguien guardando. Intenta en un momento.');
+  try {
+    const ses = { nombre: 'Corrección 28/10 (pedida por Cristian)', rol: 'director' };
+    const res = [];
+    const tp = tabla_(H.PAGOS);
+    ['P0178', 'P0179', 'P0180'].forEach(id => {
+      const p = tp.filas.find(f => f.id === id);
+      if (!p) { res.push(id + ': no lo encontré, no se cambió.'); return; }
+      if (p.recibido_en === 'Cuenta Majo') { res.push(id + ': ya estaba en Cuenta Majo.'); return; }
+      if (!esValido_(p) || p.recibido_en !== 'Caja' || norm_(p.metodo) !== 'transferencia' || norm_(p.concepto) !== norm_(CONCEPTO_VESTUARIO))
+        { res.push(id + ': no es el pago esperado (' + p.recibido_en + ', ' + p.metodo + '), no se cambió.'); return; }
+      const nota = (p.nota ? p.nota + ' · ' : '') + 'Cuenta corregida el 28/10: era transferencia a Cuenta Majo, no Caja';
+      actualizar_(tp, p, { recibido_en: 'Cuenta Majo', nota: nota });
+      bitacora_(ses, 'corregirCuenta', H.PAGOS, id, { antes: 'Caja', despues: 'Cuenta Majo', motivo: 'Transferencia a la cuenta de Majo (retiro X006 del 23/10)' });
+      res.push(id + ' (' + (p.estudiante || p.persona) + ', ' + pesos_(p.valor) + '): Caja → Cuenta Majo');
+    });
+    const tt = tabla_(H.TRASLADOS);
+    const x4 = tt.filas.find(f => f.id === 'X004'), x5 = tt.filas.find(f => f.id === 'X005');
+    if (!x4) res.push('X004: no lo encontré.');
+    else if (!esValido_(x4)) res.push('X004: ya estaba anulado.');
+    else if (!x5 || !esValido_(x5) || num_(x4.valor) !== 100000 || num_(x5.valor) !== 100000 || x4.de !== 'Cuenta Majo' || x5.de !== 'Cuenta Majo' || ymd_(x4.fecha) !== ymd_(x5.fecha))
+      res.push('X004: no coincide con X005, no se anuló. Revisar a mano.');
+    else {
+      const motivo = 'Duplicado: Majo registró el mismo retiro de $100.000 como X005';
+      actualizar_(tt, x4, { estado: 'anulado', motivo_anulacion: motivo, anulado_por: ses.nombre, anulado_en: new Date() });
+      bitacora_(ses, 'anular', H.TRASLADOS, 'X004', { motivo: motivo, lineas: 1 });
+      res.push('X004 anulado (duplicado de X005)');
+    }
+    SpreadsheetApp.flush();
+    const msg = 'Correcciones 28/10:\n' + res.join('\n');
+    console.log(msg);
+    return msg;
+  } finally { lock.releaseLock(); }
+}
