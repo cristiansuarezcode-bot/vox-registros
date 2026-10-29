@@ -2973,3 +2973,23 @@ function correccionesCuentas28oct() {
     return msg;
   } finally { lock.releaseLock(); }
 }
+
+
+// ===================================================================== concepto nuevo 28/10 (una vez, desde el editor)
+/** "Taller de competencia": sin precio fijo (se escribe lo que pagaron) y sin cargos (solo se registra quién pagó). */
+function agregarConceptoTaller28oct() {
+  nuevaLectura_();
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(30000)) throw err_('Hay alguien guardando. Intenta en un momento.');
+  try {
+    const nombre = 'Taller de competencia';
+    const ya = tabla_(H.CONCEPTOS).filas.find(f => norm_(f.nombre) === norm_(nombre));
+    if (ya) { console.log('Ya existía (' + ya.id + ').'); return 'Ya existía'; }
+    const c = { id: siguienteId_(H.CONCEPTOS, 'id', 'K', 2), nombre: nombre, valor_base: '', usa_cargos: 'No', activo: 'Sí' };
+    insertar_(H.CONCEPTOS, [c]);
+    bitacora_({ nombre: 'Concepto nuevo 28/10 (pedido por Cristian)' }, 'agregarConcepto', H.CONCEPTOS, c.id, c);
+    SpreadsheetApp.flush();
+    console.log('Listo: concepto ' + c.id + ' "' + nombre + '" creado.');
+    return 'Creado ' + c.id;
+  } finally { lock.releaseLock(); }
+}
