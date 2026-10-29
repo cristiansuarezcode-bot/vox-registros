@@ -16,7 +16,7 @@
 // Hoja de cálculo que sirve de base de datos (Registros Vox Corpus Danza, cuenta voxcorpusdanza@gmail.com).
 const HOJA_ID = '1XWxLoazHg4dCTqvaM0E2ZQYFzcL0XjNFcp_xQ4B51p0';
 const TZ = 'America/Bogota';
-const VERSION = '1.11.0';
+const VERSION = '1.11.1';
 const SESION_SEG = 6 * 60 * 60;          // máximo que permite CacheService
 const INTENTOS_MAX = 5;                  // claves erradas antes de bloquear
 const BLOQUEO_SEG = 15 * 60;
@@ -2089,11 +2089,16 @@ function cierresValidos_() {
 function movimientosCaja_(prev, hasta, desde) {
   const prevF = prev ? ymd_(prev.fecha) : null;
   const prevT = prev ? tiempo_(prev.registrado_en) : 0;
+  // Lo que tiene fecha de antes del primer cierre ya estaba contado en la base con que arrancó la caja:
+  // aunque se registre (o se corrija) después, no le toca a ningún cierre.
+  const primero = prev ? (cierresValidos_()[0] || null) : null;
+  const primeroF = primero ? ymd_(primero.fecha) : null;
   const toca = f => {
     if (!esValido_(f) || !f.fecha) return false;
     const fe = ymd_(f.fecha);
     if (fe > hasta) return false;
     if (desde && fe < desde) return false;
+    if (primeroF && fe < primeroF) return false;
     if (!prev) return desde ? true : fe === hasta;   // primer cierre: solo lo del día
     return !(tiempo_(f.registrado_en) <= prevT && fe <= prevF);
   };
@@ -2991,5 +2996,49 @@ function agregarConceptoTaller28oct() {
     SpreadsheetApp.flush();
     console.log('Listo: concepto ' + c.id + ' "' + nombre + '" creado.');
     return 'Creado ' + c.id;
+  } finally { lock.releaseLock(); }
+}
+
+
+
+// ===================================================================== corrección del cierre del 28/10 (una vez, desde el editor)
+/*
+ * El cierre CC0004 (28/10) contó como entrada de ese día el pago de Melanie Zuluaga ($70.000, fecha 21/10) que Majo
+ * volvió a registrar para poner el método. Esa plata es de antes del primer cierre, así que no le tocaba: la caja sí
+ * cuadraba. Se recalcula el cierre con la regla corregida y se deja la nota. Lo contado, lo entregado y la base no cambian.
+ */
+function corregirCierre28oct() {
+  nuevaLectura_();
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(30000)) throw err_('Hay alguien guardando. Intenta en un momento.');
+  try {
+    const ses = { nombre: 'Corrección 28/10 (pedida por Cristian)', rol: 'director' };
+    const cs = cierresValidos_();
+    const i = cs.findIndex(c => c.id === 'CC0004');
+    if (i < 1) throw err_('No encontré el cierre CC0004 (o no tiene cierre anterior).');
+    const c = cs[i], prev = cs[i - 1];
+    if (num_(c.diferencia) === 0) { console.log('CC0004 ya estaba corregido.'); return 'Ya estaba corregido'; }
+    const mov = movimientosCaja_(prev, ymd_(c.fecha));
+    // Solo lo que se registró antes de ese cierre (lo de después le toca al siguiente).
+    const t = tiempo_(c.registrado_en);
+    const filas = [].concat(tabla_(H.PAGOS).filas, tabla_(H.VENTAS).filas, tabla_(H.GASTOS).filas, tabla_(H.PAGO_PROFES).filas, tabla_(H.TRASLADOS).filas);
+    const reg = {}; filas.forEach(f => { if (f.id) reg[f.id] = tiempo_(f.registrado_en); if (f.venta) reg[f.venta] = tiempo_(f.registrado_en); });
+    const antes = mov.movimientos.filter(m => !reg[m.id] || reg[m.id] <= t);
+    const entradas = antes.filter(m => m.valor > 0).reduce((s2, m) => s2 + m.valor, 0);
+    const salidas = -antes.filter(m => m.valor < 0).reduce((s2, m) => s2 + m.valor, 0);
+    const esperado = num_(c.base_inicial) + entradas - salidas;
+    const diferencia = num_(c.contado) - esperado;
+    if (num_(c.esperado) - esperado !== 70000) throw err_('El recálculo no da la diferencia esperada de $70.000 (da ' + pesos_(num_(c.esperado) - esperado) + '): no se cambia nada.');
+    const tc = tabla_(H.CIERRES);
+    const fila = tc.filas.find(f => f.id === 'CC0004');
+    const cambios = { entradas: entradas, salidas: salidas, esperado: esperado, diferencia: diferencia,
+      nota: String(fila.nota || '') + ' · Corregido el 28/10: el pago de Melanie Zuluaga es del 21/10 (antes del primer cierre) y no le tocaba a este cierre. Esperado ' + pesos_(num_(c.esperado)) + ' → ' + pesos_(esperado) + '.' };
+    const prevVals = { entradas: num_(c.entradas), salidas: num_(c.salidas), esperado: num_(c.esperado), diferencia: num_(c.diferencia) };
+    actualizar_(tc, fila, cambios);
+    bitacora_(ses, 'corregirCierre', H.CIERRES, 'CC0004', { antes: prevVals, despues: { entradas: entradas, salidas: salidas, esperado: esperado, diferencia: diferencia } });
+    SpreadsheetApp.flush();
+    const msg = 'CC0004 corregido: entró ' + pesos_(entradas) + ', salió ' + pesos_(salidas) + ', debía haber ' + pesos_(esperado) + ', se contó ' + pesos_(num_(c.contado)) + ' → diferencia ' + pesos_(diferencia) + '.';
+    console.log(msg);
+    return msg;
   } finally { lock.releaseLock(); }
 }
