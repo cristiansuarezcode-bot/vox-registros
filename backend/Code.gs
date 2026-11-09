@@ -3042,3 +3042,45 @@ function corregirCierre28oct() {
     return msg;
   } finally { lock.releaseLock(); }
 }
+
+
+// ===================================================================== corrección 09/11 (una vez, desde el editor)
+/*
+ * Isaac López tenía fiadas 2 tiritas (venta S0154). Cuando las pagó, se registró por error una venta nueva de 2 tiritas
+ * en efectivo (S0156, línea V0193) más $200 de "cambio no devuelto" (V0194). Se anula solo la línea de las tiritas
+ * (no salieron 2 tiritas más del inventario) y se registra en su lugar el pago de su cuenta de la tienda por $800 en Caja.
+ * El cambio no devuelto se queda como estaba. La caja no cambia: siguen siendo $1.000. Si se corre otra vez, no hace nada.
+ */
+function corregirTiritasIsaac9nov() {
+  nuevaLectura_();
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(30000)) throw err_('Hay alguien guardando. Intenta en un momento.');
+  try {
+    const ses = { nombre: 'Corrección 09/11 (pedida por Cristian)', rol: 'director' };
+    const tv = tabla_(H.VENTAS);
+    const fiado = tv.filas.find(f => f.id === 'V0191');
+    const mal = tv.filas.find(f => f.id === 'V0193');
+    if (!fiado || !mal) throw err_('No encontré V0191 o V0193.');
+    const ya = tabla_(H.PAGOS).filas.find(p => esValido_(p) && /V0193/.test(String(p.nota || '')) && norm_(p.concepto) === 'cuenta tienda');
+    if (!esValido_(mal) && ya) { console.log('Ya estaba corregido (' + ya.id + ').'); return 'Ya estaba corregido'; }
+    if (!esValido_(mal)) throw err_('V0193 ya estaba anulada y no encontré el pago: revisar a mano.');
+    if (mal.venta !== 'S0156' || norm_(mal.producto) !== 'tirita' || num_(mal.total) !== 800 || mal.recibido_en !== 'Caja' || norm_(mal.metodo) !== 'efectivo')
+      throw err_('V0193 no es la venta esperada: no se cambia nada.');
+    if (!esValido_(fiado) || fiado.venta !== 'S0154' || norm_(fiado.metodo) !== 'fiado' || num_(fiado.total) !== 800 || !fiado.estudiante_id)
+      throw err_('V0191 no es el fiado esperado: no se cambia nada.');
+    const motivo = 'Era el pago de las 2 tiritas que Isaac tenía fiadas (S0154), no una compra nueva';
+    actualizar_(tv, mal, { estado: 'anulado', motivo_anulacion: motivo, anulado_por: ses.nombre, anulado_en: new Date() });
+    bitacora_(ses, 'anular', H.VENTAS, 'V0193', { motivo: motivo, lineas: 1 });
+    const p = { id: siguienteId_(H.PAGOS, 'id', 'P', 4), fecha: fecha_(ymd_(mal.fecha)), estudiante_id: fiado.estudiante_id, estudiante: fiado.estudiante, persona: '',
+      concepto: concepto_('Cuenta tienda').nombre, valor: 800, metodo: 'Efectivo', recibido_en: 'Caja', pedido_uniforme: '',
+      nota: 'Pagó las 2 tiritas fiadas (S0154). Reemplaza la venta V0193 que se registró por error', tipo: '' };
+    const fila = auditar_(p, ses);
+    fila.registrado_por = mal.registrado_por;
+    insertar_(H.PAGOS, [fila]);
+    bitacora_(ses, 'corregirTiritasIsaac9nov', H.PAGOS, p.id, { reemplaza: 'V0193', valor: 800 });
+    SpreadsheetApp.flush();
+    const msg = 'Listo: V0193 anulada y registrado el pago ' + p.id + ' de ' + fiado.estudiante + ' por $800 (Cuenta tienda, Caja).';
+    console.log(msg);
+    return msg;
+  } finally { lock.releaseLock(); }
+}
