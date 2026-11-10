@@ -3084,3 +3084,36 @@ function corregirTiritasIsaac9nov() {
     return msg;
   } finally { lock.releaseLock(); }
 }
+
+
+// ===================================================================== corrección 10/11 (una vez, desde el editor)
+/*
+ * Liz registró el costo de las gorras de Curazao ($110.000) y su pago en el montaje Parents (CM027 y G0062), pero era
+ * de Urbano Intermedio, donde ya quedó bien registrado (CM029 y G0064). Se anula el pago y luego el costo de Parents.
+ * Si se corre otra vez, no hace nada.
+ */
+function corregirGorrasParents10nov() {
+  nuevaLectura_();
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(30000)) throw err_('Hay alguien guardando. Intenta en un momento.');
+  try {
+    const ses = { nombre: 'Corrección 10/11 (pedida por Cristian)', rol: 'director' };
+    const tg = tabla_(H.GASTOS), tc = tabla_(H.COSTOS);
+    const g = tg.filas.find(f => f.id === 'G0062'), c = tc.filas.find(f => f.id === 'CM027');
+    const bien = tc.filas.find(f => f.id === 'CM029');
+    if (!g || !c || !bien) throw err_('No encontré G0062, CM027 o CM029.');
+    if (!esValido_(g) && !esValido_(c)) { console.log('Ya estaba corregido.'); return 'Ya estaba corregido'; }
+    if (c.montaje_id !== 'M07' || norm_(c.proveedor) !== 'curazao' || num_(c.valor) !== 110000 || g.costo_id !== 'CM027' || num_(g.valor) !== 110000)
+      throw err_('Los registros no son los esperados: no se cambia nada.');
+    if (!esValido_(bien) || bien.montaje_id !== 'M05' || norm_(bien.proveedor) !== 'curazao')
+      throw err_('No está el registro correcto en Urbano Intermedio: no se anula nada.');
+    const motivo = 'Se registró en Parents por error; las gorras de Curazao son de Urbano Intermedio (CM029)';
+    const ahora = new Date();
+    if (esValido_(g)) { actualizar_(tg, g, { estado: 'anulado', motivo_anulacion: motivo, anulado_por: ses.nombre, anulado_en: ahora }); bitacora_(ses, 'anular', H.GASTOS, 'G0062', { motivo: motivo, lineas: 1 }); }
+    if (esValido_(c)) { actualizar_(tc, c, { estado: 'anulado', motivo_anulacion: motivo, anulado_por: ses.nombre, anulado_en: ahora }); bitacora_(ses, 'anular', H.COSTOS, 'CM027', { motivo: motivo, lineas: 1 }); }
+    SpreadsheetApp.flush();
+    const msg = 'Listo: anulados el pago G0062 y el costo CM027 de Parents. Queda solo el de Urbano Intermedio (CM029).';
+    console.log(msg);
+    return msg;
+  } finally { lock.releaseLock(); }
+}
