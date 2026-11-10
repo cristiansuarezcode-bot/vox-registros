@@ -3117,3 +3117,23 @@ function corregirGorrasParents10nov() {
     return msg;
   } finally { lock.releaseLock(); }
 }
+
+/** 10/11: el costo de Curazao en Urbano Intermedio (CM029) son 10 gorras, no 11. */
+function corregirGorrasDescripcion10nov() {
+  nuevaLectura_();
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(30000)) throw err_('Hay alguien guardando. Intenta en un momento.');
+  try {
+    const ses = { nombre: 'Corrección 10/11 (pedida por Cristian)', rol: 'director' };
+    const tc = tabla_(H.COSTOS);
+    const c = tc.filas.find(f => f.id === 'CM029');
+    if (!c || !esValido_(c) || norm_(c.proveedor) !== 'curazao') throw err_('No encontré el costo CM029 de Curazao.');
+    if (String(c.descripcion) === '10 gorras') { console.log('Ya decía 10 gorras.'); return 'Ya estaba'; }
+    if (String(c.descripcion) !== '11 gorras') throw err_('CM029 dice "' + c.descripcion + '": no se cambia.');
+    actualizar_(tc, c, { descripcion: '10 gorras', actualizado_por: ses.nombre, actualizado_en: new Date() });
+    bitacora_(ses, 'editarCostoMontaje', H.COSTOS, 'CM029', { antes: { descripcion: '11 gorras' }, despues: { descripcion: '10 gorras' } });
+    SpreadsheetApp.flush();
+    console.log('Listo: CM029 ahora dice "10 gorras".');
+    return 'Listo';
+  } finally { lock.releaseLock(); }
+}
