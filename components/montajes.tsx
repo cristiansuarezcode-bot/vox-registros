@@ -7,7 +7,7 @@ import { BuscarQuien, Campo, Cargando, ErrorCaja, Modal, Monto, Pantalla, Segmen
 type Integrante = { id: string; estudiante_id: string; estudiante: string; esperado: number; pagado: number; saldo: number };
 type Abono = { id: string; fecha: string; valor: number; pagado_desde: string; nota: string };
 type Costo = { id: string; proveedor: string; descripcion: string; valor: number; nota: string; pagado: number; pendiente: number; abonos: Abono[] };
-type Montaje = { id: string; nombre: string; profe: string; valor_vestuario: number; activo: boolean; nota: string; integrantes: Integrante[]; cantidad: number; esperado: number; recogido: number; por_cobrar: number; costos?: Costo[] };
+type Montaje = { id: string; nombre: string; profe: string; valor_vestuario: number; cobra?: boolean; activo: boolean; nota: string; integrantes: Integrante[]; cantidad: number; esperado: number; recogido: number; por_cobrar: number; costos?: Costo[] };
 type PorRevisar = { estudiante_id: string; estudiante: string; cargo: string; montajes_cargo: number; montajes_asignados: number; valor: number };
 type Lista = { es_director: boolean; valor_base: number; montajes: Montaje[]; por_revisar: PorRevisar[]; pagado_de_mas: number; pagos_sin_montaje: number };
 
@@ -81,16 +81,19 @@ function TarjetaMontaje({ m, director, onEditar, onListo }: { m: Montaje; direct
       <div className="montaje-cabeza">
         <div>
           <h3 className="mt0">{m.nombre}</h3>
-          <span className="suave">{m.profe ? `${m.profe} · ` : ''}Vestuario {pesos(m.valor_vestuario)}</span>
+          <span className="suave">{m.profe ? `${m.profe} · ` : ''}{m.valor_vestuario > 0 ? `Vestuario ${pesos(m.valor_vestuario)}` : 'Sin cobro de vestuario'}</span>
         </div>
         {director && <button className="btn secundario chico" onClick={onEditar}>Editar</button>}
       </div>
-      <div className="montaje-datos">
+      {m.valor_vestuario > 0 ? <div className="montaje-datos">
         <div><span>Integrantes</span><b>{m.cantidad}</b></div>
         <div><span>Debería recoger</span><b>{pesos(m.esperado)}</b></div>
         <div><span>Recogido</span><b>{pesos(m.recogido)}</b></div>
         <div><span>Falta por cobrar</span><b className={m.por_cobrar > 0 ? 'debe' : ''}>{pesos(m.por_cobrar)}</b></div>
-      </div>
+      </div> : <div className="montaje-datos">
+        <div><span>Integrantes</span><b>{m.cantidad}</b></div>
+        <div><span>Cobro</span><b><span className="chip">Sin cobro</span></b></div>
+      </div>}
       {m.esperado > 0 && <div className="avance" title={`${Math.round(m.recogido * 100 / m.esperado)}% recogido`}><span style={{ width: `${Math.min(100, m.recogido * 100 / m.esperado)}%` }} /></div>}
       {m.nota && <p className="suave" style={{ fontSize: 13, margin: '0 0 8px' }}>{m.nota}</p>}
       {director && m.costos && <CostosMontaje m={m} onListo={onListo} />}
@@ -103,7 +106,7 @@ function TarjetaMontaje({ m, director, onEditar, onListo }: { m: Montaje; direct
             <li key={i.id}>
               <span>{i.estudiante}</span>
               <span className="integrante-estado">
-                {i.saldo <= 0 ? <span className="chip ok">Al día</span> : <span className="chip debe">Debe {pesos(i.saldo)}</span>}
+                {m.valor_vestuario <= 0 ? null : i.saldo <= 0 ? <span className="chip ok">Al día</span> : <span className="chip debe">Debe {pesos(i.saldo)}</span>}
                 <button className="enlace" onClick={() => setQuitar(i)}>Quitar</button>
               </span>
             </li>))}
@@ -219,11 +222,12 @@ function EditarMontaje({ m, valorBase, onCerrar, onListo }: { m: Montaje | null;
       <div className="rejilla">
         <Campo label="Nombre del montaje" ancho><input autoFocus value={nombre} onChange={e => setNombre(e.target.value)} placeholder="Ej: Urbano kids" /></Campo>
         <Campo label="Profe o coreógrafo (opcional)"><input value={profe} onChange={e => setProfe(e.target.value)} /></Campo>
-        <Campo label="Valor del vestuario" ayuda={m && m.cantidad && valor !== m.valor_vestuario ? `Se recalcula el cargo de sus ${m.cantidad} integrante(s).` : 'Por estudiante'}><Monto valor={valor} onChange={setValor} /></Campo>
+        <Campo label="Valor del vestuario" ayuda={valor === 0 ? 'Sin cobro: sirve para saber quién participa (por ejemplo, un show con estudiantes de otros grupos). No le suma nada a nadie.'
+          : m && m.cantidad && valor !== m.valor_vestuario ? `Se recalcula el cargo de sus ${m.cantidad} integrante(s).` : 'Por estudiante · 0 si no se cobra'}><Monto valor={valor} onChange={setValor} /></Campo>
         <Campo label="Nota (opcional)" ancho><input value={nota} onChange={e => setNota(e.target.value)} placeholder="Ej: vestuario negro con dorado" /></Campo>
       </div>
       <div className="acciones">
-        <button className="btn" disabled={ocupado || !nombre.trim() || valor <= 0} onClick={() => guardar()}>{ocupado ? 'Guardando…' : 'Guardar'}</button>
+        <button className="btn" disabled={ocupado || !nombre.trim() || valor < 0} onClick={() => guardar()}>{ocupado ? 'Guardando…' : 'Guardar'}</button>
         <button className="btn secundario" onClick={onCerrar}>Cancelar</button>
         {m && (m.activo
           ? <button className="btn secundario" style={{ marginLeft: 'auto' }} disabled={ocupado || m.cantidad > 0} title={m.cantidad ? 'Quita primero sus integrantes' : ''} onClick={() => guardar({ activo: false })}>Archivar</button>
@@ -357,13 +361,13 @@ function AbonarCosto({ m, c, onCerrar, onListo }: { m: Montaje; c: Costo; onCerr
 }
 
 // ------------------------------------------------------------------ informe de ganancias (solo directores)
-type Fila = { id: string; nombre: string; activo: boolean; integrantes: number; esperado: number; recogido: number; por_cobrar: number;
+type Fila = { id: string; nombre: string; activo: boolean; cobra: boolean; integrantes: number; esperado: number; recogido: number; por_cobrar: number;
   costo: number; pagado: number; debe: number; con_costo: boolean; ganancia_esperada: number; ganancia_hoy: number };
 
 const filaDe = (m: Montaje): Fila => {
   const cs = m.costos || [];
   const costo = cs.reduce((s, c) => s + c.valor, 0), pagado = cs.reduce((s, c) => s + c.pagado, 0);
-  return { id: m.id, nombre: m.nombre, activo: m.activo, integrantes: m.cantidad, esperado: m.esperado, recogido: m.recogido, por_cobrar: m.por_cobrar,
+  return { id: m.id, nombre: m.nombre, activo: m.activo, cobra: m.valor_vestuario > 0, integrantes: m.cantidad, esperado: m.esperado, recogido: m.recogido, por_cobrar: m.por_cobrar,
     costo, pagado, debe: costo - pagado, con_costo: cs.length > 0, ganancia_esperada: m.esperado - costo, ganancia_hoy: m.recogido - pagado };
 };
 const porcentaje = (g: number, base: number) => (base > 0 ? `${Math.round(g * 100 / base)}%` : '');
@@ -403,7 +407,7 @@ function Ganancias({ d }: { d: Lista }) {
       {ordenadas.map(f => (
         <div key={f.id} className="tarjeta informe-grupo">
           <div className="informe-cabeza">
-            <span><b>{f.nombre}</b><small className="suave"> · {f.integrantes} integrante(s){!f.activo && ' · archivado'}</small></span>
+            <span><b>{f.nombre}</b><small className="suave"> · {f.integrantes} integrante(s){!f.cobra && ' · sin cobro'}{!f.activo && ' · archivado'}</small></span>
             {!f.con_costo ? <span className="chip">Sin costo</span> : <span className={`chip ${f.ganancia_esperada < 0 ? 'anulado' : 'ok'}`}>{pesos(f.ganancia_esperada)}</span>}
           </div>
           <div className="informe-cols">

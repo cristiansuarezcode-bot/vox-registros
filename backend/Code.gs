@@ -16,7 +16,7 @@
 // Hoja de cálculo que sirve de base de datos (Registros Vox Corpus Danza, cuenta voxcorpusdanza@gmail.com).
 const HOJA_ID = '1XWxLoazHg4dCTqvaM0E2ZQYFzcL0XjNFcp_xQ4B51p0';
 const TZ = 'America/Bogota';
-const VERSION = '1.11.1';
+const VERSION = '1.12.0';
 const SESION_SEG = 6 * 60 * 60;          // máximo que permite CacheService
 const INTENTOS_MAX = 5;                  // claves erradas antes de bloquear
 const BLOQUEO_SEG = 15 * 60;
@@ -301,6 +301,8 @@ function registrarPago_(d, ses) {
     if (norm_(concepto.nombre) !== norm_(CONCEPTO_VESTUARIO)) throw err_('El montaje solo aplica a pagos de ' + CONCEPTO_VESTUARIO + '.');
     if (!q.estudiante_id || !integrantesValidos_().some(i => i.estudiante_id === q.estudiante_id && i.montaje_id === texto_(d.montaje_id)))
       throw err_((q.estudiante || 'Esa persona') + ' no está en ese montaje.');
+    const mm = tabla_(H.MONTAJES).filas.find(f => f.id === texto_(d.montaje_id));
+    if (mm && !cobraVestuario_(mm)) throw err_('El montaje ' + mm.nombre + ' no cobra vestuario: escoge otro de sus montajes o "Repartir".');
     p.montaje_id = texto_(d.montaje_id);
   }
   const gastoDirecto = directo ? gastoDePagoDirecto_(p, d) : null;
@@ -2248,6 +2250,10 @@ function integrantesValidos_() {
   return tabla_(H.INTEGRANTES).filas.filter(f => f.id && esValido_(f));
 }
 
+// Un montaje con vestuario de $0 (p. ej. Thriller, que hacen estudiantes de otros grupos) sirve para saber quién
+// participa, pero no cobra: no cuenta en el cargo de vestuario ni en cuántos montajes tiene cada estudiante.
+function cobraVestuario_(m) { return num_(m && m.valor_vestuario) > 0; }
+
 function montajesDe_(estudianteId) {
   const porId = indice_(tabla_(H.MONTAJES).filas.filter(f => f.id));
   return integrantesValidos_().filter(i => i.estudiante_id === estudianteId).map(i => porId[i.montaje_id]).filter(Boolean);
@@ -2255,7 +2261,8 @@ function montajesDe_(estudianteId) {
 
 /** Recalcula el cargo de vestuario de un estudiante según sus montajes. Devuelve un aviso si cambió algo importante. */
 function ajustarCargoVestuario_(estudianteId, ses) {
-  const ms = montajesDe_(estudianteId);
+  const todos = montajesDe_(estudianteId);
+  const ms = todos.filter(cobraVestuario_);
   const n = ms.length;
   const suma = ms.reduce((s, m) => s + num_(m.valor_vestuario), 0);
   const nombres = ms.map(m => m.nombre).join(', ');
@@ -2276,7 +2283,13 @@ function ajustarCargoVestuario_(estudianteId, ses) {
   const cambios = {};
   const nombreEst = est.nombre || 'Este estudiante';
   let aviso = '';
-  if (!n) {
+  if (!n && todos.length) {
+    // Solo está en montajes sin cobro (p. ej. OPEN): participa, pero no debe vestuario.
+    if (num_(c.cantidad) !== 0) cambios.cantidad = 0;
+    if (num_(c.valor_total) !== 0) cambios.valor_total = 0;
+    if (String(c.montajes || '') !== '') cambios.montajes = '';
+    if (String(c.montajes_previos || '') !== '') cambios.montajes_previos = '';
+  } else if (!n) {
     // Quedó sin montajes: el cargo no se borra solo (puede ser un error al quitarlo). Queda "por asignar"
     // hasta que lo agreguen a otro grupo o alguien marque que ya no participa.
     if (String(c.montajes || '') !== '') cambios.montajes = '';
@@ -2320,7 +2333,7 @@ function confirmarMontajes_(d, ses) {
   const t = tabla_(H.CARGOS);
   const c = t.filas.find(f => f.estudiante_id === d.estudiante_id && norm_(f.concepto) === norm_(CONCEPTO_VESTUARIO) && esValido_(f));
   if (!c) throw err_('No encontré el cargo de vestuario.');
-  if (!montajesDe_(d.estudiante_id).length) throw err_('Primero agrégalo al menos a un montaje.');
+  if (!montajesDe_(d.estudiante_id).filter(cobraVestuario_).length) throw err_('Primero agrégalo al menos a un montaje que cobre vestuario.');
   actualizar_(t, c, { montajes_previos: '' });
   bitacora_(ses, 'confirmarMontajes', H.CARGOS, c.id, { antes: { montajes_previos: c.montajes_previos } });
   ajustarCargoVestuario_(d.estudiante_id, ses);
@@ -2331,7 +2344,7 @@ function montajesPorEstudiante_() {
   if (!hojaExiste_(H.MONTAJES) || !hojaExiste_(H.INTEGRANTES)) return {};
   const ms = indice_(tabla_(H.MONTAJES).filas.filter(f => f.id));
   const o = {};
-  integrantesValidos_().forEach(i => { const m = ms[i.montaje_id]; if (m) (o[i.estudiante_id] = o[i.estudiante_id] || []).push({ id: m.id, nombre: m.nombre }); });
+  integrantesValidos_().forEach(i => { const m = ms[i.montaje_id]; if (m && cobraVestuario_(m)) (o[i.estudiante_id] = o[i.estudiante_id] || []).push({ id: m.id, nombre: m.nombre }); });
   return o;
 }
 
@@ -2345,7 +2358,7 @@ function montajesPorEstudiante_() {
 function repartoMontajes_() {
   const ms = indice_(tabla_(H.MONTAJES).filas.filter(f => f.id));
   const porEst = {};
-  integrantesValidos_().forEach(i => { if (ms[i.montaje_id]) (porEst[i.estudiante_id] = porEst[i.estudiante_id] || []).push(i.montaje_id); });
+  integrantesValidos_().forEach(i => { if (ms[i.montaje_id] && cobraVestuario_(ms[i.montaje_id])) (porEst[i.estudiante_id] = porEst[i.estudiante_id] || []).push(i.montaje_id); });
   const cargos = {};
   tabla_(H.CARGOS).filas.filter(c => esValido_(c) && norm_(c.concepto) === norm_(CONCEPTO_VESTUARIO)).forEach(c => cargos[c.estudiante_id] = c);
   const pagos = {};
@@ -2399,7 +2412,8 @@ function listarMontajes_(d, ses) {
   const porMontaje = {};
   ints.forEach(i => (porMontaje[i.montaje_id] = porMontaje[i.montaje_id] || []).push({ id: i.id, estudiante_id: i.estudiante_id, estudiante: i.estudiante }));
   const asignados = {};
-  ints.forEach(i => asignados[i.estudiante_id] = (asignados[i.estudiante_id] || 0) + 1);
+  const mIdx = indice_(montajes);
+  ints.filter(i => cobraVestuario_(mIdx[i.montaje_id])).forEach(i => asignados[i.estudiante_id] = (asignados[i.estudiante_id] || 0) + 1);
   const est = indice_(tabla_(H.ESTUDIANTES).filas);
   const porRevisar = tabla_(H.CARGOS).filas
     .filter(c => esValido_(c) && norm_(c.concepto) === norm_(CONCEPTO_VESTUARIO) && c.estudiante_id && (num_(c.montajes_previos) || num_(c.cantidad)) !== (asignados[c.estudiante_id] || 0)
@@ -2418,7 +2432,7 @@ function listarMontajes_(d, ses) {
       const rm = rep.montajes[m.id] || { esperado: 0, recogido: 0, por_cobrar: 0, integrantes: {} };
       const xs = (porMontaje[m.id] || []).map(i => Object.assign(i, rm.integrantes[i.estudiante_id] || { esperado: 0, pagado: 0, saldo: 0 }))
         .sort((a, b) => String(a.estudiante).localeCompare(String(b.estudiante), 'es'));
-      return { id: m.id, nombre: m.nombre, profe: m.profe || '', valor_vestuario: num_(m.valor_vestuario), activo: norm_(m.activo) !== 'no',
+      return { id: m.id, nombre: m.nombre, profe: m.profe || '', valor_vestuario: num_(m.valor_vestuario), cobra: cobraVestuario_(m), activo: norm_(m.activo) !== 'no',
         nota: m.nota || '', integrantes: xs, cantidad: xs.length, esperado: rm.esperado, recogido: rm.recogido, por_cobrar: rm.por_cobrar,
         costos: director ? (costos[m.id] || []) : undefined };
     }).sort((a, b) => (Number(b.activo) - Number(a.activo)) || String(a.nombre).localeCompare(String(b.nombre), 'es')),
@@ -2434,7 +2448,7 @@ function guardarMontaje_(d, ses) {
   if (!d.id) {
     const nombre = requerido_(d.nombre, 'nombre del montaje').replace(/\s+/g, ' ');
     if (t.filas.some(f => f.id && norm_(f.nombre) === norm_(nombre))) throw err_('Ya existe un montaje con ese nombre.', 'duplicado');
-    const valor = d.valor_vestuario === undefined || d.valor_vestuario === '' ? concepto_(CONCEPTO_VESTUARIO).valor_base : monto_(d.valor_vestuario);
+    const valor = d.valor_vestuario === undefined || d.valor_vestuario === '' ? concepto_(CONCEPTO_VESTUARIO).valor_base : monto_(d.valor_vestuario, true);
     const m = { id: siguienteId_(H.MONTAJES, 'id', 'M', 2), nombre: nombre, profe: texto_(d.profe), valor_vestuario: valor, activo: 'Sí',
       nota: texto_(d.nota), registrado_por: ses.nombre, registrado_en: new Date() };
     insertar_(H.MONTAJES, [m]);
@@ -2450,7 +2464,7 @@ function guardarMontaje_(d, ses) {
     if (nombre !== m.nombre) cambios.nombre = nombre;
   }
   if (d.profe !== undefined && texto_(d.profe) !== String(m.profe || '')) cambios.profe = texto_(d.profe);
-  if (d.valor_vestuario !== undefined && monto_(d.valor_vestuario) !== num_(m.valor_vestuario)) cambios.valor_vestuario = monto_(d.valor_vestuario);
+  if (d.valor_vestuario !== undefined && monto_(d.valor_vestuario, true) !== num_(m.valor_vestuario)) cambios.valor_vestuario = monto_(d.valor_vestuario, true);
   if (d.nota !== undefined && texto_(d.nota) !== String(m.nota || '')) cambios.nota = texto_(d.nota);
   const miembros = integrantesValidos_().filter(i => i.montaje_id === m.id);
   if (d.activo !== undefined && (norm_(m.activo) !== 'no') !== !!d.activo) {
@@ -3135,5 +3149,115 @@ function corregirGorrasDescripcion10nov() {
     SpreadsheetApp.flush();
     console.log('Listo: CM029 ahora dice "10 gorras".');
     return 'Listo';
+  } finally { lock.releaseLock(); }
+}
+
+
+// ===================================================================== montaje Thriller 19/11 (una vez, desde el editor)
+/*
+ * Thriller lo hacen los estudiantes de Urbano Intermedio, Open y Juvenil. Su vestuario no se cobra ($0): los trajes de
+ * zombie los hacen ellos y las máscaras las compra la academia (se registran como costo del montaje). Se crea el montaje
+ * y se agregan todos los integrantes de esos tres grupos, sin repetir. Como no cobra, a nadie le cambia el cargo.
+ * Si se corre otra vez, solo agrega a quien falte.
+ */
+const GRUPOS_THRILLER = ['Urbano Intermedio', 'Open', 'Juvenil'];
+function crearThriller19nov() {
+  nuevaLectura_();
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(30000)) throw err_('Hay alguien guardando. Intenta en un momento.');
+  try {
+    const ses = { nombre: 'Montaje Thriller 19/11 (pedido por Cristian)', rol: 'director' };
+    const ms = tabla_(H.MONTAJES).filas.filter(f => f.id && norm_(f.activo) !== 'no');
+    const origen = GRUPOS_THRILLER.map(n => {
+      const m = ms.find(f => norm_(f.nombre) === norm_(n)) || ms.filter(f => norm_(f.nombre).indexOf(norm_(n)) >= 0).sort((a, b) => a.nombre.length - b.nombre.length)[0];
+      if (!m) throw err_('No encontré el montaje "' + n + '". Montajes: ' + ms.map(f => f.nombre).join(', '));
+      return m;
+    });
+    let th = tabla_(H.MONTAJES).filas.find(f => f.id && norm_(f.nombre) === 'thriller');
+    let creado = false;
+    if (!th) {
+      th = { id: siguienteId_(H.MONTAJES, 'id', 'M', 2), nombre: 'Thriller', profe: '', valor_vestuario: 0, activo: 'Sí',
+        nota: 'Show con los de ' + origen.map(m => m.nombre).join(', ') + '. Sin cobro: los trajes los hacen ellos; las máscaras las pone la academia.',
+        registrado_por: ses.nombre, registrado_en: new Date() };
+      insertar_(H.MONTAJES, [th]);
+      bitacora_(ses, 'crearMontaje', H.MONTAJES, th.id, th);
+      creado = true;
+    } else if (cobraVestuario_(th)) throw err_('Ya existe un montaje Thriller que cobra vestuario: revisar a mano.');
+    const ints = integrantesValidos_();
+    const ya = {}; ints.filter(i => i.montaje_id === th.id).forEach(i => ya[i.estudiante_id] = true);
+    const nuevos = [], vistos = {};
+    let sig = numeroId_(siguienteId_(H.INTEGRANTES, 'id', 'IM', 4));
+    origen.forEach(m => ints.filter(i => i.montaje_id === m.id).forEach(i => {
+      if (ya[i.estudiante_id] || vistos[i.estudiante_id]) return;
+      vistos[i.estudiante_id] = true;
+      nuevos.push(auditar_({ id: 'IM' + String(sig++).padStart(4, '0'), montaje_id: th.id, montaje: th.nombre, estudiante_id: i.estudiante_id, estudiante: i.estudiante }, ses));
+    }));
+    if (nuevos.length) insertar_(H.INTEGRANTES, nuevos);
+    bitacora_(ses, 'cargarThriller', H.INTEGRANTES, th.id, { desde: origen.map(m => m.nombre), agregados: nuevos.length });
+    SpreadsheetApp.flush();
+    const total = Object.keys(ya).length + nuevos.length;
+    const msg = (creado ? 'Montaje Thriller creado (' + th.id + ', sin cobro). ' : 'Thriller ya existía. ') + 'Agregados ' + nuevos.length + ' integrantes de ' +
+      origen.map(m => m.nombre + ' (' + ints.filter(i => i.montaje_id === m.id).length + ')').join(', ') + '. Total en Thriller: ' + total + '.';
+    console.log(msg);
+    return msg;
+  } finally { lock.releaseLock(); }
+}
+
+
+/*
+ * 19/11: OPEN (M16) se creó con vestuario de $1 porque la página no dejaba poner $0, y ese peso quedó en el cargo de sus
+ * integrantes. Ahora un montaje puede ser de $0: se deja OPEN en $0 y se recalcula el cargo de sus integrantes
+ * (los que solo están en OPEN quedan en $0; los demás, con el valor exacto de sus otros grupos). Luego se crea Thriller.
+ */
+function organizarOpenYThriller19nov() {
+  nuevaLectura_();
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(30000)) throw err_('Hay alguien guardando. Intenta en un momento.');
+  const res = [];
+  try {
+    const ses = { nombre: 'Ajuste OPEN 19/11 (pedido por Cristian)', rol: 'director' };
+    const tm = tabla_(H.MONTAJES);
+    const op = tm.filas.find(f => f.id === 'M16');
+    if (!op || norm_(op.nombre) !== 'open') throw err_('No encontré el montaje OPEN (M16).');
+    if (num_(op.valor_vestuario) === 1) {
+      actualizar_(tm, op, { valor_vestuario: 0, actualizado_por: ses.nombre, actualizado_en: new Date() });
+      bitacora_(ses, 'editarMontaje', H.MONTAJES, 'M16', { antes: { valor_vestuario: 1 }, despues: { valor_vestuario: 0 }, motivo: 'Sin cobro de verdad ($0) en vez de $1' });
+      const tc = tabla_(H.CARGOS);
+      const antes = {}; tc.filas.filter(c => esValido_(c) && norm_(c.concepto) === norm_(CONCEPTO_VESTUARIO)).forEach(c => antes[c.estudiante_id] = num_(c.valor_total));
+      integrantesValidos_().filter(i => i.montaje_id === 'M16').forEach(i => {
+        ajustarCargoVestuario_(i.estudiante_id, ses);
+        const c = tabla_(H.CARGOS).filas.find(x => esValido_(x) && x.estudiante_id === i.estudiante_id && norm_(x.concepto) === norm_(CONCEPTO_VESTUARIO));
+        res.push(i.estudiante + ': ' + pesos_(antes[i.estudiante_id] || 0) + ' → ' + pesos_(c ? num_(c.valor_total) : 0));
+      });
+    } else if (num_(op.valor_vestuario) === 0) res.push('OPEN ya estaba en $0.');
+    else throw err_('OPEN tiene vestuario de ' + pesos_(op.valor_vestuario) + ': no se cambia nada.');
+    SpreadsheetApp.flush();
+  } finally { lock.releaseLock(); }
+  const th = crearThriller19nov();
+  const msg = 'OPEN en $0. Cargos:\n' + res.join('\n') + '\n' + th;
+  console.log(msg);
+  return msg;
+}
+
+/** 19/11: OPEN ya está en $0 en la planilla, pero los cargos de sus integrantes seguían con el $1 de antes. Se recalculan. */
+function recalcularCargosOpen19nov() {
+  nuevaLectura_();
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(30000)) throw err_('Hay alguien guardando. Intenta en un momento.');
+  try {
+    const ses = { nombre: 'Ajuste OPEN 19/11 (pedido por Cristian)', rol: 'director' };
+    const op = tabla_(H.MONTAJES).filas.find(f => f.id === 'M16');
+    if (!op || num_(op.valor_vestuario) !== 0) throw err_('OPEN no está en $0: no se recalcula.');
+    const cargo = id => tabla_(H.CARGOS).filas.find(x => esValido_(x) && x.estudiante_id === id && norm_(x.concepto) === norm_(CONCEPTO_VESTUARIO));
+    const res = integrantesValidos_().filter(i => i.montaje_id === 'M16').map(i => {
+      const a = cargo(i.estudiante_id); const va = a ? num_(a.valor_total) : 0;
+      ajustarCargoVestuario_(i.estudiante_id, ses);
+      const b = cargo(i.estudiante_id); const vb = b ? num_(b.valor_total) : 0;
+      return i.estudiante + ': ' + pesos_(va) + (va === vb ? ' (sin cambio)' : ' → ' + pesos_(vb));
+    });
+    SpreadsheetApp.flush();
+    const msg = 'Cargos de OPEN recalculados:\n' + res.join('\n');
+    console.log(msg);
+    return msg;
   } finally { lock.releaseLock(); }
 }
